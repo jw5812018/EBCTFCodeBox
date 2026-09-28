@@ -19,9 +19,11 @@
  * 供 T34「密钥+密文一键尝试」复用高层 API（makeAes / aesEncrypt / desEncrypt / rc4 / xorCrypt）。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
+import { bytesToBits as _bytesToBitsStd, bitsToBytes as _bitsToBytesStd } from "./bitsource.js";
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // ============================================================
 // 字节 <-> 编码 工具（hex / base64 / utf8 / latin1）
@@ -74,7 +76,7 @@ function encodeOutput(bytes, enc) {
     case "base64": return bytesToB64(bytes);
     case "latin1": { let s = ""; for (const x of bytes) s += String.fromCharCode(x); return s; }
     case "utf8":
-    default: return td(bytes);
+    default: return finishBytesDecode(bytes, { textMode: "hex", name: "decoded" });
   }
 }
 
@@ -420,21 +422,12 @@ const DES_SBOX = [
   [13,2,8,4,6,15,11,1,10,9,3,14,5,0,12,7, 1,15,13,8,10,3,7,4,12,5,6,11,0,14,9,2, 7,11,4,1,9,12,14,2,0,6,10,13,15,3,5,8, 2,1,14,7,4,10,8,13,15,12,9,0,3,5,6,11],
 ];
 
-// 字节数组 → 位数组（MSB 优先）
+// 字节数组 → 位数组（MSB 优先）；等价收敛：委托层③ 原语（src/core/bitsource.js）
 function bytesToBits(bytes) {
-  const bits = new Uint8Array(bytes.length * 8);
-  for (let i = 0; i < bytes.length; i++)
-    for (let j = 0; j < 8; j++) bits[i * 8 + j] = (bytes[i] >> (7 - j)) & 1;
-  return bits;
+  return _bytesToBitsStd(bytes, "msb");
 }
 function bitsToBytes(bits) {
-  const out = new Uint8Array(bits.length / 8);
-  for (let i = 0; i < out.length; i++) {
-    let v = 0;
-    for (let j = 0; j < 8; j++) v = (v << 1) | bits[i * 8 + j];
-    out[i] = v;
-  }
-  return out;
+  return _bitsToBytesStd(bits, "msb").bytes;
 }
 // 按 table（1-indexed）置换位数组
 function permute(bits, table) {
@@ -823,7 +816,7 @@ register({
     { key: "checkMac", label: "校验 HMAC", type: "bool", default: true },
   ],
   encode: async (text, p) => fernetEncrypt(te(text), p.key || ""),
-  decode: async (text, p) => td(await fernetDecrypt(text.trim(), p.key || "", { checkMac: p.checkMac !== false })),
+  decode: async (text, p) => finishBytesDecode(await fernetDecrypt(text.trim(), p.key || "", { checkMac: p.checkMac !== false }), { textMode: "hex", name: "fernet" }),
 });
 
 // RSA 完整版（BigInt）。encode=c=m^e mod n，decode=m=c^d mod n。

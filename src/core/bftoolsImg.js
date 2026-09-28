@@ -182,7 +182,7 @@ function toPngBytes(p) {
 
 // ============ op 注册 ============
 register({
-  id: "brainlollerDecode", family: "brainloller", familyLabel: "decode", cat: "stego", name: "Brainloller 解码",
+  id: "brainlollerDecode", family: "brainloller", familyLabel: "decode", cat: "esolang", name: "Brainloller 解码",
   desc: "Brainloller 图像 → Brainfuck 程序（bftools 实测色表 + 蛇形路径；终止色 firebrick，转向标记占格）",
   params: [{ key: "exec", label: "解码后执行 BF 并输出运行结果", type: "bool", default: false }],
   run(_t, p = {}) {
@@ -196,7 +196,7 @@ register({
   acceptsBytes: true,
 });
 register({
-  id: "brainlollerEncode", family: "brainloller", familyLabel: "encode", cat: "stego", name: "Brainloller 编码",
+  id: "brainlollerEncode", family: "brainloller", familyLabel: "encode", cat: "esolang", name: "Brainloller 编码",
   desc: "Brainfuck 程序 → Brainloller PNG（蛇形布局，行容量 W-2，行容量随宽度可调）",
   params: [{ key: "width", label: "图像宽度", type: "number", default: 16, placeholder: "≥4，每行指令容量=宽-2" }],
   encode(text, p = {}) {
@@ -205,7 +205,7 @@ register({
   },
 });
 register({
-  id: "braincopterDecode", family: "braincopter", familyLabel: "decode", cat: "stego", name: "Braincopter 解码",
+  id: "braincopterDecode", family: "braincopter", familyLabel: "decode", cat: "esolang", name: "Braincopter 解码",
   desc: "Braincopter 图像 → Brainfuck 程序（f=(-2R+3G+B) mod 11 经典规范；遇 nop/终止即停）",
   params: [
     { key: "exec", label: "解码后执行 BF 并输出运行结果", type: "bool", default: false },
@@ -222,7 +222,7 @@ register({
   acceptsBytes: true,
 });
 register({
-  id: "braincopterEncode", family: "braincopter", familyLabel: "encode", cat: "stego", name: "Braincopter 编码",
+  id: "braincopterEncode", family: "braincopter", familyLabel: "encode", cat: "esolang", name: "Braincopter 编码",
   desc: "Brainfuck 程序 → Braincopter PNG（每像素 f=(-2R+3G+B) mod 11，最小改动写入，终止符填充到宽度整数倍；载体为指定纯色）",
   params: [
     { key: "width", label: "载体宽度", type: "number", default: 64 },

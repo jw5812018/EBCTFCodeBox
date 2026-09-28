@@ -1,5 +1,5 @@
 /*
- * ttlStego.js — TTL 隐写（IP 包 TTL 值序列 ↔ 比特流，cat:'analysis'，双向）。
+ * ttlStego.js — TTL 隐写（IP 包 TTL 值序列 ↔ 比特流，cat:'stego'，双向）。
  *
  * 定位：网络流量取证高频。发包方把每个 IP 包的 TTL 设成一小撮"锚点值"之一
  * 每个锚点代表 2 bit，4 个包拼 1 字节 → 藏 ASCII。对应 all-in-one tem_exp_add
@@ -13,7 +13,7 @@
  * （decode 时按"最近锚点"归一化，容忍 63/65/127 等实测抖动值）
  * 比特 MSB 优先，每 4 个 TTL 值拼 1 字节。
  *
- * 契约：register({id, cat:'analysis', name, desc, params, encode, decode})。
+ * 契约：register({id, cat:'stego', name, desc, params, encode, decode})。
  * encode(text) 文本 → 空格分隔 TTL 序列
  * decode(text) TTL 序列（空格/逗号/换行分隔的整数）→ 文本
  *
@@ -100,7 +100,7 @@ function ttlEncode(text) {
 
 register({
   id: "ttlStego",
-  cat: "analysis",
+  cat: "stegoFile",
   name: "TTL 隐写（IP 包 TTL 序列）",
   desc: "IP 包 TTL 值序列 ↔ 文本：4 锚点(0/64/128/255)各代表 2bit，4 个包拼 1 字节。解码容忍实测抖动值（按最近锚点归一）",
   params: [],

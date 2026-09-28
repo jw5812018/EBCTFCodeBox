@@ -1,5 +1,5 @@
 /*
- * john_zip.js — ZIP 加密头 → John/hashcat hash 串提取（T288，cat:'forensic'，单向 run）。
+ * john_zip.js — ZIP 加密头 → John/hashcat hash 串提取（T288，cat:'crack'，单向 run）。
  *
  * 用途：CTF 取证里拿到加密 ZIP，想用 John the Ripper / hashcat 离线爆破密码。
  * 本 op 只提取 hash 串（不爆破），输出可直接喂给 john/hashcat 的格式。
@@ -432,7 +432,7 @@ function zip2johnRun(text, p = {}) {
 // ============================================================
 register({
   id: "zip2john", family: "zip", familyLabel: "tojohn",
-  cat: "forensic",
+  cat: "crack",
   name: "ZIP 哈希提取（zip2john）",
   desc: "从加密 ZIP 提取 John/hashcat 格式 hash 串（只提取不爆破）。ZipCrypto→$pkzip2$ 格式(hashcat 17200-17230)；WinZip AES→$zip2$ 格式(hashcat 13600)。输出可直接喂 john/hashcat 离线爆破",
   params: [

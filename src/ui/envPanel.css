@@ -308,6 +308,11 @@
   animation: env-reset-pop var(--dur-medium) var(--ease-out);
 }
 @keyframes env-reset-pop { from { opacity: 0; transform: scale(.94) translateY(8px); } to { opacity: 1; transform: none; } }
+/* 退出：独立 keyframe 名 + forwards，播完由 250ms 兜底摘除 */
+.env-reset-mask.env-reset-closing { animation: env-reset-fade-out var(--dur-4) var(--ease-in) forwards; }
+@keyframes env-reset-fade-out { from { opacity: 1; } to { opacity: 0; } }
+.env-reset-mask.env-reset-closing .env-reset-dialog { animation: env-reset-pop-out var(--dur-4) var(--ease-in) forwards; }
+@keyframes env-reset-pop-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.94) translateY(8px); } }
 .env-reset-dialog-icon {
   display: inline-flex; align-items: center; justify-content: center;
   width: 48px; height: 48px; border-radius: var(--r-full);

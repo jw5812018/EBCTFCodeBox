@@ -1,9 +1,9 @@
 /*
- * qrcode.js — 二维码 / 条码组（T58，cat:'stego'）。
+ * qrcode.js — 二维码 / 条码组（T58，cat:'image'）。
  *
  * 收录：
  * qrGen QR 码生成（encode 输出矩阵 JSON）：数字/字母/字节模式 + L/M/Q/H 纠错
- * qrParse QR 结构解析（run）：版本/掩码/纠错级识别（解析 ASCII art 矩阵）
+ * qrParseOp 矩阵结构解析（库函数，由 qrScanImage 合并入口调用）：版本/掩码/纠错级识别（解析 ASCII art 矩阵）
  * barcodeIdentify 条码类型判定（run）：QR/Aztec/DataMatrix/PDF417 结构识别 + 1D 条码判定
  *
  * 红线：
@@ -11,7 +11,7 @@
  * - 纯算法生成矩阵（0/1 二维数组），渲染交 UI。
  * - 不引 CDN/npm 运行时，全部本地计算。
  *
- * 契约：register({id, cat:"stego", name, desc, params, encode?, run?})。
+ * 契约：register({id, cat:"image", name, desc, params, encode?, run?})。
  * 生成类 encode(text, p) → JSON 字符串（矩阵 + 元信息）；
  * 识别类 run(text, p) → 文本报告。
  *
@@ -869,7 +869,7 @@ function barcodeIdentifyOp(text) {
 // 注册
 // ============================================================
 register({
-  id: "qrGen", family: "qr", familyLabel: "gen", cat: "stego", name: "QR 码生成",
+  id: "qrGen", family: "qr", familyLabel: "gen", cat: "image", name: "QR 码生成",
   desc: "纯 JS QR 编码（数字/字母/字节模式 + L/M/Q/H 纠错），输出可扫描二维码 PNG（含静默区）+ 0/1 矩阵 JSON。核心移植自 Nayuki (MIT)",
   params: [
     { key: "ecl", label: "纠错级", type: "select", default: "M",
@@ -888,14 +888,7 @@ register({
 });
 
 register({
-  id: "qrParse", family: "qr", familyLabel: "parse", cat: "stego", name: "QR 结构解析",
-  desc: "解析 QR 矩阵（ASCII art / 0-1 行）：版本/掩码/纠错级识别 + finder/暗模块校验",
-  params: [],
-  run: qrParseOp,
-});
-
-register({
-  id: "barcodeIdentify", cat: "stego", name: "条码类型判定",
+  id: "barcodeIdentify", cat: "image", name: "条码类型判定",
   desc: "2D（QR/Aztec/DataMatrix 结构识别）+ 1D（EAN/UPC/ISBN/ITF/Code39/Codabar 校验位判定）",
   params: [],
   run: barcodeIdentifyOp,
@@ -903,7 +896,7 @@ register({
 
 export {
   qrGenerate, qrEncodeOp, matrixToDataURL, qrParseOp, barcodeIdentifyOp,
-  pickMode, pickVersion, getNumDataCodewords, getNumRawDataModules,
+  pickMode, pickVersion, getNumDataCodewords, getNumRawDataModules, encodedBitLength,
   ECL_NAME, ECL_INDEX, ALPHANUMERIC_CHARSET,
   parseAsciiMatrix, isFinderAt, countFinders, detectAztec, detectDataMatrix,
   readFormatInfo, readVersionInfo, FORMAT_INFO_CODES, VERSION_INFO_CODES,

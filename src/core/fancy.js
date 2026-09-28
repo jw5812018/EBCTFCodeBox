@@ -14,6 +14,11 @@ const A_UP = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 // ============ 摩斯电码 ============
 // 码表照抄 WhatsInYourClipboard encodedText.js + 常用标点（ITU-R M.1677）
+// 码表来源：ITU-R M.1677-1 §1.1 的封闭清单 + 以下非 ITU 扩展（已逐条核验）：
+//   常见但非官方：! ; & _ $
+//   本工具自加：{ } * # %   （其中 # 在 ITU 清单中无对应码）
+//   注意：& (.-...) 与 % (...-.-) 的码值分别与 ITU 的 prosign「等待」「结束工作」同形，语义不同。
+// 类外字符（非 '.'/'-' 且非本表码）按「整 token 忽略」处置，不产出字符。
 const MORSE = {
   ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F",
   "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L",
@@ -56,7 +61,10 @@ function morseDecode(text) {
   return s.split(/\s*\/\s*/).map((word) =>
     word.trim().split(/\s+/).filter(Boolean).map((c) => {
       if (MORSE[c]) return MORSE[c];
-   // ④ 未知码回退：'.'→0 '-'→1 → 16 位二进制 → hex → chr（参考实现行为）
+   // ④ 非纯点划 token = 类外输入：按「忽略」处置，该 token 不产出任何字符
+   //    （此前把任何非 '.' 字符都当作 '1' 位，故 '#' 会静默解出 U+0001 控制字符）
+      if (!/^[.\-]+$/.test(c)) return "";
+   // ⑤ 未知纯点划码回退：'.'→0 '-'→1 → 16 位二进制 → chr（参考实现行为，仅对纯点划生效）
       const bin = [...c].map((ch) => (ch === "." ? "0" : "1")).join("").padStart(16, "0");
       const v = parseInt(bin, 2);
       return v > 0 && v <= 0xffff ? String.fromCharCode(v) : "?";

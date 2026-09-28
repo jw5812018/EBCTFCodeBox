@@ -1,7 +1,7 @@
 /*
  * edu-bridge-new.js — 本地桥/exe 桥接类 op 的科普数据分片（纯数据，无副作用）。
  *
- * 覆盖 15 个「调本机 exe / 启动本机 GUI」的桥接 op。这些 op 本质是外部工具的包装：
+ * 覆盖 14 个「调本机 exe / 启动本机 GUI」的桥接 op。这些 op 本质是外部工具的包装：
  * - GUI 型（*Launch）：只调 bridge /api/launch 拉起本机 exe，用户在弹窗里手动操作
  * 工具箱不代喂输入、不代取结果。
  * - CLI 型（*Bridge / *Exe）：调 bridge /api/run 无人值守执行，文件走 {占位符} 传入。
@@ -14,33 +14,6 @@ export default {
  // ============================================================
  // GUI 启动器（bridgeStego）
  // ============================================================
-  watermarkhLaunch: {
-    what: "启动本机的 watermarkH 图像水印隐写工具（吾爱破解出品）的一个按钮。",
-    principle:
-      "watermarkH 是一款把文字/图片当作水印藏进载体图像、或从图像里提取水印的国产 GUI 隐写工具，" +
-      "在吾爱破解论坛流传，CTF 图片 misc 题里常见。\n\n" +
-      "本 op 不做任何图像处理：它只通过本地桥 bridge.py 的 /api/launch 接口把本机的 watermarkH.exe 拉起来，" +
-      "真正的藏/取操作全在弹出的程序窗口里由你手动完成。",
-    usage:
-      "仅 Windows。先在本机运行 python bridge.py（监听 localhost:8181），刷新本页后点击本功能即可拉起 watermarkH 窗口。" +
-      "这是纯 GUI 启动器：工具箱不接收输入、也不返回结果，所有隐写操作请在弹出的 watermarkH 窗口里手动做。",
-    examples: [
-      {
-        in: "（无输入，直接点击）",
-        out: "● 已启动本机 exe：watermarkH · 水印\n路径：...\n请在弹出的程序窗口里手动操作。",
-        desc: "点击后桥拉起 watermarkH.exe，其余在原生窗口操作。",
-      },
-    ],
-    tips: [
-      "拿到一张可疑图片先用它试试有没有隐藏水印，很多国产 misc 题就靠它。",
-      "桥没起会返回「本地桥未就绪」，先确认 python bridge.py 在跑、且是 Windows。",
-    ],
-    aka: [
-      "watermarkH", "watermark", "图像水印", "图片水印", "水印隐写", "吾爱破解", "52pojie",
-      "图片隐写", "watermarkH.exe", "image watermark", "steganography", "misc 隐写",
-    ],
-  },
-
   jphswinLaunch: {
     what: "启动本机的 JPHS for Windows（jphide/jpseek），把数据藏进 JPEG 或从中取出。",
     principle:

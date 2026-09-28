@@ -21,6 +21,7 @@
  * 契约：register({ id:"e0", cat:"modern", name, desc, params, encode, decode })。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ---- 常量（LFSR 寄存器超出 32 位安全范围，全程用 BigInt） ----
 const LFSR_LENS = [25n, 31n, 33n, 39n];
@@ -220,7 +221,7 @@ function parseClk(p) {
 }
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 function bytesToHex(bytes) {
   let s = "";
@@ -249,7 +250,7 @@ function e0Decode(text, p = {}) {
   const ks = e0Keystream(key, addr, clk, data.length);
   const out = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = data[i] ^ ks[i];
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "e0" });
 }
 
 // ---- 载入自校验：与 Python 参考实现（工具/_e0_ref.py）交叉验证 ----

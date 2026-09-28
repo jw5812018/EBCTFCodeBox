@@ -129,7 +129,7 @@ function tbwDetect(t) {
 
 register({
 	id: "textBlindWatermark",
-	cat: "stego",
+	cat: "stegoText",
 	name: "文本盲水印",
 	desc: "guofei9987/text_blind_watermark v1 JS 版格式：水印逐字符变长二进制（不补零），经单/双 U+200C 藏进掩护文本，每位消耗 1 个掩护字符；与「零宽字符隐写」（Misawa radix-4）互不兼容。encode: 水印+掩护文本→隐写文本；decode: 隐写文本→水印",
 	params: [

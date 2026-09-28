@@ -18,6 +18,7 @@
  * 契约：register({ id:"hc256", cat:"modern", name, desc, params, encode, decode })。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ---- 32 位运算工具 ----
 function rotr(x, n) { return ((x >>> n) | (x << (32 - n))) >>> 0; }
@@ -115,7 +116,7 @@ function parseHex256(s, name) {
 }
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 function hc256Encode(text, p = {}) {
   const key = parseHex256(p && p.key, "密钥");
@@ -136,7 +137,7 @@ function hc256Decode(text, p = {}) {
   const ks = hc256Keystream(key, iv, data.length);
   const out = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = data[i] ^ ks[i];
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "hc256" });
 }
 
 // ---- 载入自校验：Crypto++ TestVectors/hc256.txt 官方向量 ----

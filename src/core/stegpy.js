@@ -191,7 +191,7 @@ async function stegpyDecodeOp(text, p = {}) {
 }
 
 register({
-  id: "stegpy", cat: "stego", name: "stegpy 隐写（stegv3）",
+  id: "stegpy", cat: "stegoFile", name: "stegpy 隐写（stegv3）",
   desc: "stegpy 工具兼容隐写：bit 平面交错 1/2/4 位 + 可选 PBKDF2-Fernet 密码加密，无损图像载体（stegv3 魔数帧）",
   params: [
     { key: "message", label: "待隐藏文本", type: "text", default: "", placeholder: "编码方向要藏进图片的文本" },

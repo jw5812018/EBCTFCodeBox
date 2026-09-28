@@ -1,5 +1,5 @@
 /*
- * pietExec.js — Piet 图形语言解释器（cat:'fancy'）。
+ * pietExec.js — Piet 图形语言解释器（cat:'esolang'）。
  *
  * 对标 npiet.exe（npiet v1.3）。pietIdent（esolang2.js）只识别不执行，本 op 真执行：
  * 读色块网格 → DP/CC 状态机 → 栈操作 → 输出。opId 独立（pietExec）。

@@ -34,6 +34,7 @@ function el(tag, attrs = {}, ...children) {
 }
 
 let _off = null; // onPluginsChange 取消订阅（页面卸载时解绑）
+let _pageObserver = null;
 
 /**
  * 在工作区渲染插件/MCP 独立页（main.js 的 renderWorkspace 调用）。
@@ -41,6 +42,7 @@ let _off = null; // onPluginsChange 取消订阅（页面卸载时解绑）
  */
 export function renderPluginsPage(host) {
   if (_off) { _off(); _off = null; }
+  if (_pageObserver) { _pageObserver.disconnect(); _pageObserver = null; }
   const page = el("div", { class: "plugin-page" });
   host.append(page);
   const rerender = () => {
@@ -57,6 +59,13 @@ export function renderPluginsPage(host) {
   rerender();
  // 插件集合变化（启用/停用/卸载）→ 重渲染当前页；页面被替换时解绑（下次进入重新绑定）。
   _off = onPluginsChange(rerender);
+  _pageObserver = new MutationObserver(() => {
+    if (page.isConnected && host.contains(page)) return;
+    if (_off) { _off(); _off = null; }
+    _pageObserver?.disconnect();
+    _pageObserver = null;
+  });
+  _pageObserver.observe(document.body, { childList: true, subtree: true });
 }
 
 // ---- 1. 插件区 ----

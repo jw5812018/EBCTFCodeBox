@@ -31,6 +31,7 @@
  * 契约：register({ id:"a51", cat:"modern", name, desc, params, encode, decode })。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ---- 寄存器掩码 / 钟控位 / 抽头 / 输出位（照参考实现常量） ----
 const R1MASK = 0x07ffff; // 19 位
@@ -147,7 +148,7 @@ function parseFrame(p) {
 }
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 function bytesToHex(bytes) {
   let s = "";
@@ -181,7 +182,7 @@ function a51Decode(text, p = {}) {
   const ks = genKeystreamBytes(key, frame, data.length);
   const out = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = data[i] ^ ks[i];
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "a51" });
 }
 
 register({

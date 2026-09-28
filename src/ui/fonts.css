@@ -67,7 +67,7 @@
  * TH-Tshyn-P0.ttf 切片，工具/_mt78_merge_subset.py merge 进 th-ctf-subset.woff2）。
  * 结果：cmap 14710 → 15017（丢失 0），字形 14594 → 14905，1.52 MB → 1.53 MB（+7.8 KB），
  * GDEF 里 U+0332 类别 3（mark）与 GSUB ccmp 均保住。所以这里**不需要**第二条 @font-face。
- * 旧档备份在 资料/字库/备份/th-ctf-subset.woff2.bak。回归脚本：工具/rt_browser_uv_grapheme.mjs。
+ * 字库子集与旧档备份均本地留存。
  */
 
 /*

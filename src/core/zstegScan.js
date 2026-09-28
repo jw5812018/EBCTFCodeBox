@@ -1,5 +1,5 @@
 /*
- * zstegScan.js — LSB 全组合扫描（cat:'stego'，P1 批）。
+ * zstegScan.js — LSB 全组合扫描（cat:'image'，P1 批）。
  *
  * 解决什么：CTF 里 PNG/BMP 的 LSB 隐写通道组合多（哪个位平面 × 哪些通道 ×
  * 位序 × 行列遍历），手工逐个试很费时。本 op 在一组有界组合上批量提取并按
@@ -22,10 +22,10 @@
  *   （自包含纯 JS，PNG 8bit 非隔行 / BMP 24·32bit 未压缩），测试构造复用 mcMap.encodePNG。
  * - 算法层零 UI 依赖；零外发。
  */
-import { register } from "./registry.js";
 import { inputToBytes } from "./compress.js";
 import { decodePngPixels, decodeBmpPixels } from "./lsbExtract.js";
 import { encodePNG } from "./mcMap.js";
+import { extractBytes } from "./bitsource.js";
 
 const MAX_BYTES = 2048;   // 每组合提取上限（与主流扫描工具的输出窗口同量级）
 const TOP_N = 8;          // 最多展示候选数
@@ -50,59 +50,26 @@ const CHANNEL_COMBOS = [
  * @returns {Uint8Array}
  */
 export function extractPlane(samples, width, height, channels, chans, bit, colMajor, maxBytes) {
-  const out = new Uint8Array(maxBytes);
-  let acc = 0, nbits = 0, outLen = 0;
-  const step = chans.length;
-  const totalPx = width * height;
-  for (let i = 0; i < totalPx && outLen < maxBytes; i++) {
-    // 行优先：i = y*w+x；列优先：i = x*h+y → 反解像素下标
-    let px;
-    if (colMajor) {
-      const x = Math.floor(i / height), y = i % height;
-      px = y * width + x;
-    } else {
-      px = i;
-    }
-    const base = px * channels;
-    for (let c = 0; c < step; c++) {
-      acc = (acc << 1) | ((samples[base + chans[c]] >> bit) & 1);
-      if (++nbits === 8) {
-        out[outLen++] = acc & 0xff;
-        acc = 0; nbits = 0;
-        if (outLen >= maxBytes) break;
-      }
-    }
-  }
-  return out.subarray(0, outLen);
+  return _extractPlanned(samples, width, height, channels, chans, bit, "msb", colMajor, maxBytes);
 }
 
 // LSB-first 变体：第 k 个比特放字节低位（权重 1<<k），遍历与取位同上：
 export function extractPlaneLsbFirst(samples, width, height, channels, chans, bit, colMajor, maxBytes) {
-  const out = new Uint8Array(maxBytes);
-  let outLen = 0;
-  const totalPx = width * height;
-  let bitPos = 0; // 当前字节内第几个比特（权重 1<<bitPos）
-  let byte = 0;
-  const step = chans.length;
-  for (let i = 0; i < totalPx && outLen < maxBytes; i++) {
-    let px;
-    if (colMajor) {
-      const x = Math.floor(i / height), y = i % height;
-      px = y * width + x;
-    } else {
-      px = i;
-    }
-    const base = px * channels;
-    for (let c = 0; c < step; c++) {
-      byte |= ((samples[base + chans[c]] >> bit) & 1) << bitPos;
-      if (++bitPos === 8) {
-        out[outLen++] = byte;
-        byte = 0; bitPos = 0;
-        if (outLen >= maxBytes) break;
-      }
-    }
-  }
-  return out.subarray(0, outLen);
+  return _extractPlanned(samples, width, height, channels, chans, bit, "lsb", colMajor, maxBytes);
+}
+
+// 等价收敛：两个「只差位序」的历史函数收敛到同一原语（层③ 比特提取抽象 src/core/bitsource.js），
+// 遍历序 / 位序 / 取位序列全部走声明，不再各写一份循环。
+function _extractPlanned(samples, width, height, channels, chans, bit, bitOrder, colMajor, maxBytes) {
+  return extractBytes(
+    { width, height, channels, samples },
+    {
+      scan: colMajor ? "col" : "row",
+      select: chans.map((c) => ({ channel: c, plane: bit })),
+      bitOrder,
+      limit: maxBytes,
+    },
+  ).bytes;
 }
 
 /**
@@ -260,8 +227,8 @@ export function makeLsbPng(msg, o = {}) {
   return encodePNG(rgba, width, height);
 }
 
-// ============ op run 包装 ============
-function zstegRun(text, p) {
+// ============ op run 包装（供统一「隐写检测」op 复用） ============
+export function zstegRun(text, p) {
   const bytes = (p && p.rawBytes && p.rawBytes.length)
     ? (p.rawBytes instanceof Uint8Array ? p.rawBytes : new Uint8Array(p.rawBytes))
     : inputToBytes(text, p);
@@ -297,28 +264,7 @@ function zstegRun(text, p) {
   return lines.join("\n");
 }
 
-// ============ 注册 ============
-register({
-  id: "zstegScan", cat: "stego", name: "LSB 全组合扫描",
-  desc: "PNG/BMP 位平面×通道×位序×行列遍历批量提取，按可读性+flag 正则打分排序（默认 bit0 十组合，可开到位 7 / 列优先）",
-  params: [
-    { key: "inputEnc", label: "输入编码（文本输入时）", type: "select", default: "auto",
-      options: [
-        { value: "auto", label: "自动（hex/base64/UTF-8）" },
-        { value: "hex", label: "Hex" },
-        { value: "base64", label: "Base64" },
-        { value: "utf8", label: "UTF-8 文本" },
-      ],
-    },
-    { key: "maxBit", label: "最大 bit 位（0..7）", type: "number", default: 0 },
-    { key: "columnMajor", label: "含列优先遍历", type: "bool", default: false },
-    { key: "flagRegex", label: "flag 正则（空=不加成）", type: "text", default: "flag\\{" },
-    { key: "exportCombo", label: "导出组合（如 bit0 rgb msb；空=扫描）", type: "text", default: "" },
-    { key: "exportMaxBytes", label: "导出上限（字节，最大1048576）", type: "number", default: 65536 },
-  ],
-  run: zstegRun,
-  acceptsBytes: true,
-});
+// ============ 导出（zstegScan 已并入统一「隐写检测」op，不再自我注册） ============
 
 // ============ 加载期自检（失败未处理异常会非零退出，CI 可抓） ============
 export const zstegSelfTest = (() => {

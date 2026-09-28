@@ -39,6 +39,11 @@ import EDU_BASE1 from "./edu/edu-base1.js";                  // base 补全 12
 import EDU_BASE2 from "./edu/edu-base2.js";                  // base 补全 12
 import EDU_CLASSIC1 from "./edu/edu-classic1.js";            // classic 补全 8
 import EDU_CLASSIC2 from "./edu/edu-classic2.js";            // classic 补全 8
+import EDU_JEFFERSON from "./edu/edu_jefferson.js";
+import EDU_AMSCO from "./edu/edu_amsco.js";
+import EDU_RAGBABY from "./edu/edu_ragbaby.js";
+import EDU_TRILITERE from "./edu/edu_trilitere.js";
+import EDU_SKIP_CIPHER from "./edu/edu_skipCipher.js";
 import EDU_FANCY_CN from "./edu/edu-fancy-cn.js";            // fancy+cn 补全 9
 import EDU_HASH1 from "./edu/edu-hash1.js";                  // hash 补全 11
 import EDU_HASH2 from "./edu/edu-hash2.js";                  // hash 补全 11
@@ -73,6 +78,7 @@ import EDU_RADIX_TIME from "./edu/edu-radix-time.js";        // radix 时间/纪
 import EDU_STEGO_IMAGE from "./edu/edu-stego-image.js";      // stego 图像 12
 import EDU_STEGO_QR_AUDIO from "./edu/edu-stego-qr-audio.js";// stego QR/音频 9
 import EDU_STEGO_TEXT from "./edu/edu-stego-text.js";        // stego 文本 14
+import EDU_STEGO_DETECT from "./edu/edu-stego-detect.js";    // 统一隐写检测 stegoDetect 1（11 mode 收敛入口）
 import EDU_BATCH6 from "./edu/edu-batch6.js";                // 补缺：9 新增 op 科普（usbKeyboard/usbMouse/sevenZipExtract/goldbug/acrostic/everyN/caseBitStego/nthChar/wordSpacingBits）
 // ---- 扩展模块交付但从未 import 的孤儿科普分片归并（44 个已注册 op 缺科普）----
 // 跨分片重复已清零（T504 二批摘除 cast5/twofish/bwt 输家块，2026-09-13）。
@@ -134,6 +140,47 @@ import EDU_T508 from "./edu/edu-t508.js";                 // T508 批一古典 A
 import EDU_T508_B4 from "./edu/edu-t508-b4.js";           // T508 批四工程编码（hexdump/modhex/citrixCtx1/scriptDecoder/rison/unixPerms 6）
 import EDU_T508_B2 from "./edu/edu-t508-b2.js";           // T508 批二编码映射（crockford32/alienAlphabet/futhark/countingRods/chuckUnary/wingdings/cardanGrille 7）
 import EDU_T508_B3 from "./edu/edu-t508-b3.js";           // T508 批三压缩校验（rle/lzw/elias/verhoeff/lz4Dec/bzip2Dec 6）
+import EDU_PIP_ASTRO from "./edu/edu-pipAstro.js";        // 符号记数组（astroSymbols/pipNumerals 2）
+import EDU_STEGHIDE from "./edu/edu-steghide.js";           // steghide 隐写双向（1）
+import EDU_PCAP_FIELDS from "./edu/edu-pcap-fields.js";       // pcap 字段提取/过滤（1）
+import EDU_GIFSHUFFLE from "./edu/edu-gifshuffle.js";       // GifShuffle 调色板排列隐写（1）
+import EDU_OUTGUESS from "./edu/edu-outguess.js";           // OutGuess 0.4 隐写双向（1）
+import EDU_BLINDWM2 from "./edu/edu-blindwm2.js";         // 双图盲水印族（dualFftWatermark/dwtSvdWatermark 2）
+import EDU_PRIME_INSPECTOR from "./edu/edu-prime-inspector.js"; // 素数判定与筛选（primeInspector 1）
+
+// 科普分片新增（古典密码补全二 / 编码映射 / 取证格式，中文；英文层待发布阶段接）
+import EDU_BELLASO from "./edu/edu_bellaso.js";
+import EDU_COLLON from "./edu/edu_collon.js";
+import EDU_DANCING_MEN from "./edu/edu_dancingMen.js";
+import EDU_MONOME_BINOME from "./edu/edu_monomeBinome.js";
+import EDU_PHILLIPS from "./edu/edu_phillips.js";
+import EDU_SLIDEFAIR from "./edu/edu_slidefair.js";
+import EDU_THREE_SQUARE from "./edu/edu_threeSquare.js";
+import EDU_VIC from "./edu/edu_vic.js";
+import EDU_ZODIAC from "./edu/edu_zodiac.js";
+import EDU_BABYLONIAN_NUMERALS from "./edu/edu_babylonianNumerals.js";
+import EDU_EGYPTIAN_NUMERALS from "./edu/edu_egyptianNumerals.js";
+import EDU_HIEROGLYPHS from "./edu/edu_hieroglyphs.js";
+import EDU_IBAN from "./edu/edu_iban.js";
+import EDU_KUZNYECHIK from "./edu/edu_kuznyechik.js";
+import EDU_MARINE_FLAGS from "./edu/edu_marineFlags.js";
+import EDU_MAYA_NUMERALS from "./edu/edu_mayaNumerals.js";
+import EDU_MIRROR_LETTERS from "./edu/edu_mirrorLetters.js";
+import EDU_OCCULT from "./edu/edu_occult.js";
+import EDU_SGA from "./edu/edu_sga.js";
+import EDU_HTML_COMMENT_EXTRACT from "./edu/edu_htmlCommentExtract.js";
+import EDU_LZNT1 from "./edu/edu_lznt1.js";
+import EDU_SSDEEP from "./edu/edu_ssdeep.js";
+import EDU_ZIP_COMMENT_EXTRACT from "./edu/edu_zipCommentExtract.js";
+import EDU_MORSE_WAV from "./edu/edu_morseWav.js";
+import EDU_TRAFFIC_READABLE from "./edu/edu_trafficReadable.js";
+import EDU_QR_SCAN_IMAGE from "./edu/edu_qrScanImage.js";
+import EDU_BEAUFORT_VARIANT from "./edu/edu_beaufortVariant.js";
+import EDU_REDEFENCE from "./edu/edu_redefence.js";
+import EDU_OBJECT_ID_TIME from "./edu/edu_objectIdTime.js";
+import EDU_RC4_DROP from "./edu/edu_rc4Drop.js";
+import EDU_XSALSA20 from "./edu/edu_xsalsa20.js";
+import EDU_DATA_TO_IMAGE from "./edu/edu_dataToImage.js";
 
 // 合并所有分片。后者不覆盖前者（分区不重叠）；重叠时以后者为准，构建期应避免。
 const EDU = Object.assign(
@@ -148,6 +195,11 @@ const EDU = Object.assign(
   EDU_BASE2,
   EDU_CLASSIC1,
   EDU_CLASSIC2,
+  EDU_JEFFERSON,
+  EDU_AMSCO,
+  EDU_RAGBABY,
+  EDU_TRILITERE,
+  EDU_SKIP_CIPHER,
   EDU_FANCY_CN,
   EDU_HASH1,
   EDU_HASH2,
@@ -173,6 +225,7 @@ const EDU = Object.assign(
   EDU_STEGO_IMAGE,
   EDU_STEGO_QR_AUDIO,
   EDU_STEGO_TEXT,
+  EDU_STEGO_DETECT,
   EDU_BATCH6,
   EDU_BATCH5_NEW,
   EDU_BATCH5_MODERN,
@@ -230,6 +283,45 @@ const EDU = Object.assign(
   EDU_T508_B4,
   EDU_T508_B2,
   EDU_T508_B3,
+  EDU_BELLASO,
+  EDU_COLLON,
+  EDU_DANCING_MEN,
+  EDU_MONOME_BINOME,
+  EDU_PHILLIPS,
+  EDU_SLIDEFAIR,
+  EDU_THREE_SQUARE,
+  EDU_VIC,
+  EDU_ZODIAC,
+  EDU_BABYLONIAN_NUMERALS,
+  EDU_EGYPTIAN_NUMERALS,
+  EDU_HIEROGLYPHS,
+  EDU_IBAN,
+  EDU_KUZNYECHIK,
+  EDU_MARINE_FLAGS,
+  EDU_MAYA_NUMERALS,
+  EDU_MIRROR_LETTERS,
+  EDU_OCCULT,
+  EDU_SGA,
+  EDU_HTML_COMMENT_EXTRACT,
+  EDU_LZNT1,
+  EDU_SSDEEP,
+  EDU_ZIP_COMMENT_EXTRACT,
+  EDU_MORSE_WAV,
+  EDU_TRAFFIC_READABLE,
+  EDU_QR_SCAN_IMAGE,
+  EDU_BEAUFORT_VARIANT,
+  EDU_REDEFENCE,
+  EDU_OBJECT_ID_TIME,
+  EDU_RC4_DROP,
+  EDU_XSALSA20,
+  EDU_DATA_TO_IMAGE,
+  EDU_PIP_ASTRO,
+  EDU_BLINDWM2,
+  EDU_OUTGUESS,
+  EDU_GIFSHUFFLE,
+  EDU_PCAP_FIELDS,
+  EDU_STEGHIDE,
+  EDU_PRIME_INSPECTOR,
 );
 
 import { ZH as INTEGRATED, HASH_VECTORS, BASE_NOTES, EXTRA_ALIASES, CRC_PARAMS } from "./edu/edu-integrated.js";

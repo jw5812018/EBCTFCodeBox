@@ -23,10 +23,11 @@ export default {
     what: "Google's Plus Code (Open Location Code, OLC): encodes latitude/longitude into a short code, so even places with no street address can be pinpointed precisely.",
     principle:
       "On the grid of latitude [-90,90] and longitude [-180,180], subdivide level by level: each pair of characters locates one grid layer, with the alphabet `23456789CFGHJMPQRVWX` (easily-confused characters removed).\n\n" +
-      "A `+` separator is inserted after the first 8 characters; an 11-character full code pinpoints to about a few meters.",
-    usage: "encode turns `lat,lon` into a Plus Code (8-char short code or 11-char full code). decode turns a Plus Code back into the center point of its coordinates.",
+      "A `+` separator is inserted after the 8th character; code length (significant digits, excluding +) sets precision: 10 digits is about 14 m, an 11-digit grid code about 3 m; fewer than 8 digits are padded with `0` (e.g. `7FG49Q00+`).",
+    usage: "encode turns `lat,lon` into a Plus Code (code length = significant digits, default 10 digits = 11 chars incl. +). decode turns a full code back into its center point (short codes need a reference point and are not supported here).",
     examples: [
-      { in: "39.9,116.4", param: "11-char full code", out: "8PFRW92X+2X", desc: "near Beijing" },
+      { in: "39.9,116.4", param: "10-digit full code", out: "8PFRWC22+22", desc: "near Beijing" },
+      { in: "39.9,116.4", param: "11-digit grid code", out: "8PFRWC22+222", desc: "near Beijing (finer)" },
     ],
     tips: ["Easy to recognize: a string of uppercase letters and digits with a `+` in the middle, containing no easily-confused characters like 0/1/A/E/I/O/U.", "Search a Plus Code directly in Google Maps to jump to that point, no registered address needed."],
     aka: ["plus code", "olc", "开放位置码", "google plus code", "加号码", "Open Location Code",

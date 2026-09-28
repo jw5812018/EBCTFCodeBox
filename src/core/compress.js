@@ -28,6 +28,15 @@
  */
 import { register } from "./registry.js";
 import { inflateRaw } from "./pcapDeep.js"; // 纯 JS inflate（RFC 1951），DecompressionStream 挂死时的兜底
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 const te = (s) => new TextEncoder().encode(s);
 const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
@@ -132,7 +141,7 @@ function bytesToOutput(bytes) {
   if (bytes.length === 0) return { text: "", mode: "text" };
  // 优先尝试 UTF-8 fatal 解码：合法 UTF-8 文本（含中文/emoji）能成功解码
   try {
-    const s = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const s = _decodeUtf8Fatal(bytes);
  // 排除含过多控制字符（除 \n \r \t）的情况，避免二进制碰巧合法 UTF-8
     let ctrl = 0;
     for (const ch of s) {
@@ -334,7 +343,7 @@ async function streamCompress(format, bytes) {
   try {
     return await withTimeout(nativeCompress(format, bytes), TIMEOUT_MS);
   } catch (e) {
-    // T366 补齐（2026-09-02，恒烈指出压缩侧不能留尾巴）：超时/失败/无 Streams →
+    // T366 补齐（2026-09-02，产品裁决压缩侧不能留尾巴）：超时/失败/无 Streams →
     // stored deflate 兜底（合法 deflate 流、任何解压器可解；不压缩体积但 100% 正确）。
     return jsDeflateFallback(format, bytes);
   }
@@ -416,6 +425,7 @@ const ARCHIVE_MAGIC = [
   { sig: [0x78, 0xDA], offset: 0, name: "zlib", ext: "zlib", desc: "zlib 压缩流（RFC 1950，最佳压缩）" },
   { sig: [0x78, 0x5E], offset: 0, name: "zlib", ext: "zlib", desc: "zlib 压缩流（RFC 1950，轻量压缩）" },
   { sig: [0x42, 0x5A, 0x68], offset: 0, name: "bzip2", ext: "bz2", desc: "BZIP2 压缩流（BZh magic）" },
+  { sig: [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00], offset: 0, name: "xz", ext: "xz", desc: "XZ 压缩流（.xz magic FD 37 7A 58 5A 00）" },
   { sig: [0x50, 0x4B, 0x03, 0x04], offset: 0, name: "zip", ext: "zip", desc: "ZIP 归档（PK\\003\\004，本地文件头）" },
   { sig: [0x50, 0x4B, 0x05, 0x06], offset: 0, name: "zip", ext: "zip", desc: "ZIP 空归档（PK\\005\\006，仅 EOCD）" },
   { sig: [0x50, 0x4B, 0x07, 0x08], offset: 0, name: "zip", ext: "zip", desc: "ZIP 分片归档（PK\\007\\008）" },
@@ -447,7 +457,7 @@ function archiveIdentifyRun(text, p) {
   const m = detectArchiveMagic(bytes);
   if (!m) {
     lines.push("");
-    lines.push("结果: 未匹配已知归档 magic（gzip/zlib/bzip2/zip/rar/7z/tar）");
+    lines.push("结果: 未匹配已知归档 magic（gzip/zlib/bzip2/zip/rar/7z/tar/xz）");
     lines.push("提示: 可能是 raw deflate（无头）、自定义格式或文本");
  // raw deflate 启发：首字节低 4 位 = 0x08（CM=8），且 BFINAL 在 bit0
     const b0 = bytes[0];
@@ -901,7 +911,7 @@ const INPUT_ENC_PARAM = {
 // 注册
 // ============================================================
 register({
-  id: "gzipCodec", cat: "forensic", name: "Gzip 解压 / 压缩",
+  id: "gzipCodec", cat: "archive", name: "Gzip 解压 / 压缩",
   desc: "gzip 流双向（浏览器 DecompressionStream；输入 hex/base64/UTF-8 自动识别）",
   params: [INPUT_ENC_PARAM, OUTPUT_FILE_PARAM],
   encode: gzipOps.encode, decode: gzipOps.decode,
@@ -909,7 +919,7 @@ register({
   acceptsBytes: true,
 });
 register({
-  id: "zlibCodec", cat: "forensic", name: "Zlib 解压 / 压缩",
+  id: "zlibCodec", cat: "archive", name: "Zlib 解压 / 压缩",
   desc: "zlib 流（含 2 字节头 + adler32 尾）双向；浏览器实测",
   params: [INPUT_ENC_PARAM, OUTPUT_FILE_PARAM],
   encode: zlibOps.encode, decode: zlibOps.decode,
@@ -917,7 +927,7 @@ register({
   acceptsBytes: true,
 });
 register({
-  id: "deflateRawCodec", cat: "forensic", name: "Raw Deflate 解压 / 压缩",
+  id: "deflateRawCodec", cat: "archive", name: "Raw Deflate 解压 / 压缩",
   desc: "raw deflate（无 zlib 头）双向；浏览器实测",
   params: [INPUT_ENC_PARAM, OUTPUT_FILE_PARAM],
   encode: deflateRawOps.encode, decode: deflateRawOps.decode,
@@ -930,7 +940,7 @@ register({
 // 函数本体 archiveIdentifyRun/zipListRun/tarListRun 保留 + export（供导出/测试）。
 // b64CompressedProbe 保留：扫「文本内嵌 base64 压缩流」是 archiveUnified（整体归档）不覆盖的独有场景。
 register({
-  id: "b64CompressedProbe", cat: "forensic", name: "Base64 内嵌压缩流探测",
+  id: "b64CompressedProbe", cat: "archive", name: "Base64 内嵌压缩流探测",
   desc: "扫文本中 base64 段 → 解码 → magic 识别 → 尝试 gzip/zlib/deflate 解压",
   params: [
     { key: "minLen", label: "最小 base64 段长度", type: "number", default: 40, placeholder: "8-1000" },

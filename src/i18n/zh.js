@@ -46,9 +46,14 @@ export default {
   "cat.radix": "进制 / 字符集",
   "cat.analysis": "分析 / 爆破",
   "cat.crypto": "密码攻击",
-  "cat.forensic": "取证 / 文件",
+  "cat.archive": "压缩 / 归档",
+  "cat.crack": "口令 / 归档破解",
+  "cat.forensic": "取证 / 流量",
+  "cat.filefmt": "文件格式 / 结构",
   "cat.data": "数据结构 / 序列化",
-  "cat.stego": "隐写 / 图像",
+  "cat.image": "图像 / 二维码",
+  "cat.audio": "音频 / 音视频",
+  "cat.stego": "隐写",
   "cat.bridgeStego": "本地桥·隐写嵌入",
 
  // ---- T361 产物协议 + T365 云端下载警告 ----
@@ -323,6 +328,8 @@ export default {
   "ui.topbar.updateReady": "发现新版本，离线资源已下载完成。立即刷新应用？",
   "ui.topbar.updateUnsupported": "当前浏览器不支持离线更新。",
   "ui.topbar.updateFailed": "更新检查失败，请稍后重试。",
+  "ui.pwa.updateBar": "发现新版本，离线资源已就绪",
+  "ui.pwa.updateRefresh": "刷新",
 
  // ---- UI：首页一把梭 ----
   "ui.expand.title": "展开编辑",
@@ -353,6 +360,10 @@ export default {
   "ui.op.fontDec": "缩小字号",
   "ui.op.fontInc": "放大字号",
   "ui.op.export": "导出为文件",
+  "ui.op.localFonts": "读取本机字体",
+  "ui.op.localFontsDone": "已读取本机字体 {0} 个",
+  "ui.op.localFontsFail": "读取本机字体失败：{0}",
+  "ui.op.pickImage": "选择图片",
   "ui.op.pickFile": "选择文件",
   "ui.op.chainToInput": "输出→输入（链式）",
   "ui.op.convert": "转换",
@@ -449,6 +460,7 @@ export default {
   "ui.recipe.dir.run": "运行",
   "ui.recipe.addOp": "＋ 搜索添加操作…",
   "ui.recipe.addEmpty": "无匹配操作",
+  "ui.recipe.chooseFamilyOp": "选择要加入配方链的操作",
   "ui.recipe.unknownOp": "未知 op: ",
   "ui.recipe.moveUp": "上移",
   "ui.recipe.moveDown": "下移",
@@ -824,7 +836,6 @@ export default {
  // ---- 关于页 ----
   "ui.about.btn": "关于",
   "cat.esolang": "深奥编程语言",
-  "op.stegoQuickScan.name": "图片隐写快速分析",
   "ui.about.close": "关闭",
   "ui.about.appName": "恒烈 CTF 编码工具箱",
   "ui.about.tagline": "纯前端 · 零外发的 CTF 编解码与密码学工具箱",
@@ -852,7 +863,7 @@ export default {
   "ui.about.fontModified": "本项目对原字库做过修改（按 Unicode 平面切分、生成 CTF 常用字子集），非原版；若显示异常概由修改所致，与原作者无关。",
   "ui.about.fontNonCommercial": "原字库整合自多个免费版权字体，基本不可商用。本项目开源非商用引用属合规；任何人不得将本项目或其内含字库用于商业用途。",
   "ui.about.foot": "为 CTF 选手与安全爱好者打造。所有依赖均本地打包，运行时零外发。",
-  "ui.about.intro": "一个纯前端、零外发的 CTF 编解码 / 密码学 / 隐写工具箱——500+ 功能，覆盖编码、古典与现代密码、哈希、隐写、取证、分析，一键智能解码。全部在你的浏览器本地运行：不联网、不上传、不留痕。可直接打开 index.html、起本地服务器、或作为静态站点部署。",
+  "ui.about.intro": "一个纯前端、零外发的 CTF 编解码 / 密码学 / 隐写工具箱——500+ 功能，覆盖编码、古典与现代密码、哈希、隐写、取证、分析，一键智能解码。全部在你的浏览器本地运行：不联网、不上传、不留痕。用自带的启动脚本起本地服务器、或部署为静态站点即可使用（ES module 与 WASM 需 http(s) 环境，直接双击 index.html 会被浏览器安全策略拦截）。",
   "ui.about.thanks": "鸣谢",
   "ui.about.thanksVal": "感谢所有被引用或借鉴的开源项目与作者，以及 CTF 社区分享的各类编码方案与题解。",
   "ui.about.regTitle": "授权信息",
@@ -1074,7 +1085,6 @@ export default {
   "op.zipPseudoEncrypt.name": "ZIP 伪加密（置位）",
   "op.stringsExtract.name": "字符串提取（strings）",
   "op.jwtCrack.name": "JWT 密钥爆破",
-  "op.zstegScan.name": "LSB 全组合扫描",
   "op.pdfObjects.name": "PDF 对象解析",
   "op.ooxmlMeta.name": "OOXML 元数据提取",
   "op.apkManifest.name": "APK Manifest 解析",
@@ -1085,7 +1095,6 @@ export default {
   "op.deepsoundExtract.name": "DeepSound 提取",
  // stego
   "op.qrGen.name": "QR 码生成",
-  "op.qrParse.name": "QR 结构解析",
   "op.barcodeIdentify.name": "条码类型判定",
  // radix · color
   "op.color.name": "颜色编码互转",
@@ -1122,7 +1131,6 @@ export default {
   "op.mimeMultipart.name": "MIME multipart 解析",
   "op.magnetParse.name": "Magnet 链接解析",
  // stego · confusables
-  "op.confusablesSkeleton.name": "同形字骨架归一化",
  // analysis · serial
   "op.protobufParse.name": "Protobuf Wire 解析",
   "op.msgpackParse.name": "MessagePack 解析",
@@ -1131,7 +1139,6 @@ export default {
   "op.phpSerializeParse.name": "PHP serialize 解析",
   "op.javaSerializeIdent.name": "Java 序列化识别",
  // analysis · hexview
-  "op.hexView.name": "十六进制查看器",
   "op.hexRange.name": "Hex 区间提取",
   "op.hexStats.name": "字节分布统计",
  // radix · timecodecExt
@@ -1140,7 +1147,6 @@ export default {
   "op.chromeTime.name": "Chrome 时间 ↔ ISO8601",
   "op.snowflakeId.name": "雪花 ID 解析",
  // stego · invisibles
-  "op.invisibleViz.name": "不可见字符可视化",
  // analysis · cryptanalysis2
   "op.vigenereAuto.name": "维吉尼亚全自动破解",
   "op.hillKnownPlain.name": "Hill 已知明文攻击",
@@ -1190,8 +1196,6 @@ export default {
   "op.pickleDisasm.name": "Pickle 反汇编",
   "op.jjencode.name": "JJEncode",
   "op.zuc.name": "ZUC 祖冲之",
-  "op.sm2.name": "SM2",
-  "op.sm9.name": "SM9",
   "op.spoon.name": "Spoon",
   "op.sstiKeyword.name": "SSTI 关键字识别",
   "op.numToPinyin.name": "数字转拼音",
@@ -1221,7 +1225,6 @@ export default {
   "op.asciiSum.name": "ASCII 前缀累加和",
   "op.caesarBox.name": "凯撒箱换位 Caesar Box",
   "op.curveCipher.name": "曲路密码 Curve Cipher",
-  "op.watermarkhLaunch.name": "watermarkH · 水印",
   "op.jphswinLaunch.name": "JPHS · JPEG 隐写",
   "op.openpuffLaunch.name": "OpenPuff · 多载体",
   "op.oursecretLaunch.name": "OurSecret · 隐写",
@@ -1304,16 +1307,12 @@ export default {
   "op.eccCalc.name": "ECC 点运算",
   "op.ecdsaReuseK.name": "ECDSA nonce 重用攻击",
   "op.rabin.name": "Rabin 密码",
-  "op.x25519.name": "X25519 密钥交换",
-  "op.ed25519.name": "Ed25519 签名 / 验签",
   "op.siphash.name": "SipHash 消息认证码",
   "op.scrypt.name": "scrypt 密钥派生",
   "op.balloon.name": "Balloon 密钥派生",
   "op.lyra2.name": "Lyra2 密钥派生",
   "op.yescrypt.name": "yescrypt 密钥派生",
   "op.blake3.name": "BLAKE3 哈希",
-  "op.paillier.name": "Paillier 同态加密",
-  "op.schnorr.name": "Schnorr 签名 / 验签 / 攻击",
   "op.magma.name": "GOST Magma 分组密码",
   "op.present.name": "PRESENT 轻量分组密码",
   "op.serpent.name": "Serpent 分组密码",
@@ -1338,7 +1337,6 @@ export default {
   "op.xorshiftRecover.name": "xorshift 状态恢复",
   "op.yenc.name": "yEnc 编 / 解码",
   "op.binhex.name": "BinHex 4.0 编 / 解码",
-  "op.dsa.name": "DSA 签名 / 验签 / 攻击",
 
   "op.des2Mitm.name": "2DES 中间相遇",
   "op.bmpPalette.name": "BMP 调色板隐写分析",
@@ -1346,13 +1344,12 @@ export default {
   "op.pcapRepair.name": "pcap 文件修复",
   "op.spectrogram.name": "音频频谱图（STFT）",
   "op.lfsrRecover.name": "LFSR 序列恢复",
-  "op.geffe.name": "Geffe 生成器 / 相关攻击",
   "op.roar.name": "兽音译者（嗷呜啊~）",
   "op.crc32Reverse.name": "CRC32 反向碰撞",
   "op.jsEscape.name": "JS escape 编码",
   "op.bubblebabble.name": "BubbleBabble 编码",
   "op.rc4Visualize.name": "RC4 KSA/PRGA 可视化",
-  "op.f5stego.name": "F5 JPEG 隐写提取",
+  "op.f5stego.name": "F5 JPEG 隐写 编/解",
   "op.lllAttack.name": "格基归约 LLL 攻击",
   "op.xiangyue.name": "想曰 XiangYue",
   "op.xiangyueEnc.name": "想曰 XiangYue 加密",
@@ -1386,12 +1383,6 @@ export default {
   "op.utf16.name": "UTF-16 BE/LE",
   "op.mojibakeFix.name": "乱码修复 (Mojibake)",
   "op.qrDecode.name": "QR 码解码",
-  "op.zwScan.name": "零宽字符扫描",
-  "op.confusablesScan.name": "同形异义字检测",
-  "op.unicodeNormalize.name": "Unicode 规范化",
-  "op.whitespaceScan.name": "空格隐写检测",
-  "op.bidiScan.name": "双向控制符检测",
-  "op.charInspect.name": "字符属性透视",
   "op.dtmfWav.name": "DTMF 拨号音 WAV",
   "op.txtmoji.name": "txtmoji emoji 加密",
   "op.godzillaPhpXorBase64.name": "哥斯拉 PHP_XOR_BASE64",
@@ -1430,6 +1421,8 @@ export default {
   "ui.plugin.mcpNote": "把工具箱能力（list_ops / run_op / magic_decode）导出为 MCP 工具描述，供 AI 客户端调用。数据可给 AI 分析，操作可给 AI 执行，全程本地。",
   "ui.plugin.mcpExport": "导出 MCP 工具描述",
   "ui.plugin.mcpExported": "MCP 工具描述已导出（JSON 文件）",
+
+  // ---- 浏览器扩展 · 本地桥 ----
  // --- 编码图查询器 ----
   "ui.ci.title": "编码图查询器",
   "ui.ci.desc": "244 张图形编码对照表：外星文字 / 游戏文字 / 古代文字 / 符号 / 旗语手语 / 条码等，人肉对照解码用。",
@@ -1500,6 +1493,13 @@ export default {
   "ui.ds.customBadge": "已改动（自定义）",
   "ui.home.strengthBtn": "解码强度",
  // ---- 算法族滑块档位短名（T380；familyLabel → fam.lbl.*，族条目/滑块共用）----
+  "fam.lbl.fields": "字段提取",
+  "fam.lbl.attack": "重用 k 攻击",
+  "fam.lbl.sharedPub": "由公钥推导",
+  "fam.lbl.homAdd": "同态加",
+  "fam.lbl.scan": "扫描",
+  "fam.lbl.formatBrute": "爆破",
+  "fam.lbl.smartReport": "智能报告",
   "fam.lbl.keygen": "密钥对",
   "fam.lbl.encrypt": "加密",
   "fam.lbl.decrypt": "解密",
@@ -1577,7 +1577,7 @@ export default {
   "fam.lbl.encaps": "封装",
   "fam.lbl.decaps": "解封装",
   "fam.lbl.shared": "共享密钥",
-  // ---- Base 显示族档位中文名（恒烈 2026-09-08 特许 F1：档位滑块用中文名，不用英文 op id；随「Base 隐写」族新增）----
+  // ---- Base 显示族档位中文名（产品负责人 2026-09-08 特许 F1：档位滑块用中文名，不用英文 op id；随「Base 隐写」族新增）----
   "fam.lbl.base58": "Base58",
   "fam.lbl.base58check": "Base58Check（比特币地址校验）",
   "fam.lbl.base64": "Base64",

@@ -386,7 +386,7 @@ function formatGifSizeReport(buf) {
 // PNG 宽高爆破恢复
 register({
   id: "pngSizeRecover", family: "png", familyLabel: "sizerecover",
-  cat: "stego",
+  cat: "image",
   name: "PNG 宽高爆破恢复",
   desc: "检测 PNG IHDR CRC 篡改 + 爆破恢复真实宽高（CTF 改高度藏图经典；先只爆高度 O(N) 秒出，再爆宽度，最后双爆兜底；输出修复后 base64）",
   params: [],
@@ -406,7 +406,7 @@ register({
 // BMP 宽高修复（无 CRC，靠像素数据量反推）
 register({
   id: "bmpSizeRecover", family: "bmp", familyLabel: "sizerecover",
-  cat: "stego",
+  cat: "image",
   name: "BMP 宽高修复",
   desc: "检测 BMP 宽高与像素数据量不一致 + 反推真实宽高（BMP 无 CRC，用像素字节数整除 rowSize 反推；CTF 改 BMP 宽高藏图；输出修复后 base64）",
   params: [],

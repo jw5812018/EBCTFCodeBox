@@ -1,7 +1,7 @@
 /*
  * edu-t508-b4.js — T508 批四·工程编码组 E1/E3/E4/E5/E6/E9 科普卡（engEncoding.js）。
  * hexdump / modhex / citrixCtx1 / scriptDecoder / rison / unixPerms
- * 示例输出全部来自实跑（资料/工程留存/T508/批4_工程编码/test.mjs 同口径），无编造。
+ * 示例输出全部来自实跑（独立脚本同口径核验），无编造。
  */
 export default {
   hexdump: {

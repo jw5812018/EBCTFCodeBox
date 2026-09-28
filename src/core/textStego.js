@@ -143,7 +143,7 @@ function acrosticDecode(text, p) {
 }
 
 register({
-  id: "acrostic", cat: "stego", name: "藏头/藏尾/藏中",
+  id: "acrostic", cat: "stegoText", name: "藏头/藏尾/藏中",
   desc: "文本隐写：把隐藏消息字符放在载体每行/句/词的首/尾/中位。encode 需载体，decode 取对应位置字符拼接",
   params: [
     { key: "cover", label: "载体文本", type: "text", default: "", placeholder: "encode 时必填的可见外壳文本" },
@@ -211,7 +211,7 @@ function everyNDecode(text, p) {
 }
 
 register({
-  id: "everyN", cat: "stego", name: "等距取字隐写",
+  id: "everyN", cat: "stegoText", name: "等距取字隐写",
   desc: "文本隐写：每 N 字取一拼隐藏消息。encode 把 msg 字符按每 N 位置 1 个分散进载体，decode 每 N 取第 N 个",
   params: [
     { key: "cover", label: "载体文本", type: "text", default: "", placeholder: "encode 时必填的可见外壳文本" },
@@ -282,7 +282,7 @@ function caseBitDecode(text, p) {
 }
 
 register({
-  id: "caseBitStego", cat: "stego", name: "大小写位隐写",
+  id: "caseBitStego", cat: "stegoText", name: "大小写位隐写",
   desc: "文本隐写：用载体字母大小写承载比特（大写=1，小写=0）。msg→UTF-8→比特→改大小写。前 32 比特为长度前缀",
   params: [
     { key: "cover", label: "载体文本", type: "text", default: "", placeholder: "encode 时必填，须含足够字母" },
@@ -347,7 +347,7 @@ function nthCharDecode(text, p) {
 }
 
 register({
-  id: "nthChar", cat: "stego", name: "第 N 字隐写",
+  id: "nthChar", cat: "stegoText", name: "第 N 字隐写",
   desc: "文本隐写：每行/句/词第 N 字拼隐藏消息（藏头=N1，藏第2字=N2）。encode 替换第 N 字，decode 取第 N 字",
   params: [
     { key: "cover", label: "载体文本", type: "text", default: "", placeholder: "encode 时必填的可见外壳文本" },
@@ -417,7 +417,7 @@ function wordSpacingDecode(text, p) {
 }
 
 register({
-  id: "wordSpacingBits", cat: "stego", name: "词距位隐写",
+  id: "wordSpacingBits", cat: "stegoText", name: "词距位隐写",
   desc: "文本隐写：用词间空格数承载比特（1空格=0，2空格=1）。msg→UTF-8→比特→改空格数。前 32 比特为长度前缀",
   params: [
     { key: "cover", label: "载体文本", type: "text", default: "", placeholder: "encode 时必填，须含足够词间距" },

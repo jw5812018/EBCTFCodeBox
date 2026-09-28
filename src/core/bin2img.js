@@ -67,7 +67,7 @@ function bin2imgRun(text, p = {}) {
 
 register({
   id: "bin2img",
-  cat: "stego",
+  cat: "image",
   name: "二进制转图片",
   desc: "0/1 位流 → 黑白点阵图（1=黑 0=白，可反色）。CTF 中一串二进制按宽度排布常构成 flag 文字/二维码。输出 PNG，可下载。宽度留空自动取近似正方形。",
   params: [

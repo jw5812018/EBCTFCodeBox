@@ -1,5 +1,5 @@
 /*
- * bmpPalette.js — BMP 调色板隐写分析（cat:'stego'，run 型单向分析）。
+ * bmpPalette.js — BMP 调色板隐写分析（cat:'image'，run 型单向分析）。
  *
  * 定位：CTF 图像取证高频。针对 8-bit（及 1/4-bit）索引 BMP 的调色板隐写
  * 专攻信息藏在「调色板」而非像素数据里的场景。对应 ctf-wiki misc 图像隐写节。
@@ -27,7 +27,7 @@
  * - 件内自注册（register(op)）。
  * - 无 emoji，报告用黑白几何符号（● ✓ ← ▸ × ✗ ⚠）。
  *
- * 契约：register({id:'bmpPalette', cat:'stego', name, desc, params, run})。
+ * 契约：register({id:'bmpPalette', cat:'image', name, desc, params, run})。
  * 输入：BMP 文件的 hex 或 base64 文本（parseInput 自动判别，自备不 import）。
  */
 import { register } from "./registry.js";
@@ -522,7 +522,7 @@ function bmpPaletteRun(text, p) {
 // ============================================================
 register({
   id: "bmpPalette", family: "bmp", familyLabel: "palette",
-  cat: "stego",
+  cat: "image",
   name: "BMP 调色板隐写分析",
   desc: "解析 1/4/8-bit 索引 BMP 调色板：dump 全部项 + 抽取 LSB/索引顺序/相邻差值隐写候选 + 未用索引统计，命中 flag 高亮",
   params: [

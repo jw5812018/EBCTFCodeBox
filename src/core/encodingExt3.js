@@ -44,7 +44,7 @@
  *                   形态）= 明文入孔位、掩护文本字符依序补实位（多余掩护文丢弃）。解密 = 掩模对齐
  *                   取孔位字符。页面例：掩模 XXX_XX_XX_X_X_XX + OESDVBCNEOHDEEML → DCODE。
  *
- * 对拍与测试：资料/工程留存/T508/批2_编码映射/test.mjs（dCode/Wikipedia 官方例 + 手推向量 +
+ * 对拍与测试：dCode/Wikipedia 官方例 + 手推向量 +
  * 与 base32 op 交叉对拍 + 往返 + 异常路径）。本文件为自研实现，无外部依赖。
  */
 import { register } from "./registry.js";
@@ -67,7 +67,8 @@ function crockfordTol(c) { // 解码容错（原文：i/l→1、o→0，大小�
 }
 
 function crockfordEncode(text, p) {
-  const bytes = te(text);
+  // 字节直通：位流编的是原始字节（与 base32 同口径）。
+  const bytes = (p && p.rawBytes) || te(text);
   let bits = 0, val = 0, out = "";
   for (const b of bytes) {
     val = (val << 8) | b; bits += 8;
@@ -127,6 +128,8 @@ register({
     { key: "check", label: "校验位（数值 mod 37，扩展符 * ~ $ = U）", type: "bool", default: false },
     { key: "dashGroup", label: "连字符分组（每 N 符插 -，0=不分组）", type: "number", default: 0 },
   ],
+  // encode 方向吃字节；decode 输入是 Base32 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: crockfordEncode,
   decode: crockfordDecode,
 });

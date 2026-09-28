@@ -21,6 +21,7 @@
  */
 
 import { icon as iconSvg } from "./icons.js";
+import { attachModalLifecycle } from "./modalLifecycle.js";
 
 // ---- 样式一次性注入（幂等） ----
 // export：main.js 的 openSectionView 也复用 .exp-* 遮罩/卡片样式，需在无输入框实例化的
@@ -127,6 +128,7 @@ export function openExpandModal(initialValue = "", onSave, labels = {}) {
   dialog.className = "exp-dialog";
   dialog.setAttribute("role", "dialog");
   dialog.setAttribute("aria-modal", "true");
+  dialog.setAttribute("aria-label", modalTitle);
 
  // 头部：标题 + 关闭
   const head = document.createElement("div");
@@ -176,23 +178,22 @@ export function openExpandModal(initialValue = "", onSave, labels = {}) {
     setTimeout(() => {
       overlay.remove();
       if (previousFocus?.isConnected) previousFocus.focus();
-    }, 175);
+    }, 250);
   }
   function commit() {
     if (typeof onSave === "function") onSave(ta.value);
     close();
   }
   function onKey(e) {
-    if (e.key === "Escape") { e.preventDefault(); close(); }
-    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
   }
 
   closeBtn.addEventListener("click", close);
   cancel.addEventListener("click", close);
   save.addEventListener("click", commit);
  // 点遮罩关闭（仅点在 overlay 本身，非冒泡自 dialog）
-  overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) close(); });
   document.addEventListener("keydown", onKey);
+  attachModalLifecycle(overlay, { dialog, onClose: close, initialFocus: ta, restoreFocusTo: previousFocus });
 
  // 聚焦 + 光标置末尾
   requestAnimationFrame(() => {
@@ -254,8 +255,9 @@ const CSS = `
   padding: var(--sp-4);
   animation: exp-fade var(--dur-medium) var(--ease-out);
 }
-.exp-overlay.exp-closing { animation: exp-fade var(--dur-4) var(--ease-in) reverse; }
+.exp-overlay.exp-closing { animation: exp-fade-out var(--dur-4) var(--ease-in) forwards; }
 @keyframes exp-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes exp-fade-out { from { opacity: 1; } to { opacity: 0; } }
 
 .exp-dialog {
   width: 100%;
@@ -270,10 +272,14 @@ const CSS = `
   padding: var(--sp-5);
   animation: exp-pop var(--dur-medium) var(--ease-out);
 }
-.exp-overlay.exp-closing .exp-dialog { animation: exp-pop var(--dur-4) var(--ease-in) reverse; }
+.exp-overlay.exp-closing .exp-dialog { animation: exp-pop-out var(--dur-4) var(--ease-in) forwards; }
 @keyframes exp-pop {
   from { opacity: 0; transform: scale(.96) translateY(8px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes exp-pop-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(.96) translateY(8px); }
 }
 
 .exp-head {
@@ -353,8 +359,4 @@ const CSS = `
 }
 .exp-save:hover { filter: brightness(1.08); }
 .exp-save:active { filter: brightness(.94); }
-
-@media (prefers-reduced-motion: reduce) {
-  .exp-overlay, .exp-dialog, .exp-overlay.exp-closing, .exp-overlay.exp-closing .exp-dialog { animation: none; }
-}
 `;

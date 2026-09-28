@@ -1,5 +1,5 @@
 /*
- * stringsExtract.js — 通用可打印字符串提取（T347，cat:'forensic'，单向 run）。
+ * stringsExtract.js — 通用可打印字符串提取（T347，cat:'filefmt'，单向 run）。
  *
  * 场景：逆向 / 取证的起手动作——任意字节流里扫出「连续可打印字符 ≥ 最小长度」
  * 的片段（经典 strings 命令的浏览器版）。不限可执行文件，对任何二进制都可用，
@@ -196,7 +196,7 @@ function stringsExtractRun(text, p) {
 // ============ register ============
 
 register({
-  id: "stringsExtract", cat: "forensic", name: "字符串提取（strings）",
+  id: "stringsExtract", cat: "filefmt", name: "字符串提取（strings）",
   desc: "任意字节流里提取连续可打印字符串（经典 strings 工具）：ASCII / UTF-16LE / 双模式合并，最小长度阈值，可选偏移前缀。逆向取证起手动作，图片/文档/内存转储里快速捞 flag、路径、域名",
   params: [
     { key: "minLen", label: "最小长度", type: "number", default: 4 },

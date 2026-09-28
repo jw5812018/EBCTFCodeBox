@@ -327,7 +327,7 @@ function renderRadixPanel() {
   bar.append(el("span", { class: "qc-bar-label" }, tt("ui.qc.width")));
   R.widthChips = [];
   for (const w of [8, 16, 32, 64]) {
-    // 字宽按钮做成正圆（恒烈指定；VIS 规范「按钮变体」里 icon 型按钮即圆形）。
+    // 字宽按钮做成正圆（产品负责人指定；VIS 规范「按钮变体」里 icon 型按钮即圆形）。
     const chip = el("button", {
       class: "qc-chip qc-chip-round" + (S.width === w ? " active" : ""),
       type: "button", title: `${w} ${tt("ui.qc.bitsUnit")}`,
@@ -548,7 +548,7 @@ function runExpr() {
 }
 
 // ---- 基址 + 偏移(RVA) = 绝对地址(VA) ----
-// 恒烈给的验收场景：逆向时汇编里的相对地址换成绝对地址。任填两个算第三个。
+// 产品负责人给的验收场景：逆向时汇编里的相对地址换成绝对地址。任填两个算第三个。
 function renderRvaTool() {
   const box = el("div", { class: "qc-rva" });
   box.append(el("div", { class: "qc-rva-title" }, msym("swap_horiz"), el("span", {}, tt("ui.qc.rvaTitle"))));
@@ -640,7 +640,7 @@ const CUR_CATS = UNIT_CATS.filter((c) => c.group === "currency");
 const isCurCat = (id) => CUR_CATS.some((c) => c.id === id);
 
 // 历史：曾有一段时期 renderFuelPanel（油耗快捷入口）写死 S.unitCat="fuel" 污染分类记忆，
-// 恒烈报「全部被归类到油耗」后根治；2026-08-26 恒烈拍板删掉冗余的「杂项」tab
+// 产品负责人报「全部被归类到油耗」后根治；2026-08-26 产品裁决删掉冗余的「杂项」tab
 // （与单位换算面板完全重复），时间/频率/角度/油耗等分类一律从单位换算 tab 进。
 function unitCatNow() { return S.unitCat; }
 function setUnitCat(id) { S.unitCat = id; }
@@ -859,7 +859,7 @@ function renderDatePanel() {
   refreshWd();
 }
 
-// ============ 面板 ⑥：杂项（原「油耗」tab）——2026-08-26 恒烈拍板删除 ============
+// ============ 面板 ⑥：杂项（原「油耗」tab）——2026-08-26 产品裁决删除 ============
 // 「杂项」tab 曾复用整个单位换算面板（内容 100% 重复，仅默认落点不同），判定冗余后移除。
 // 时间 / 频率 / 角度 / 时间戳纪元 / 油耗等分类仍全部保留在单位换算 tab 的分类条里。
 

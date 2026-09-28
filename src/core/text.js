@@ -7,14 +7,27 @@
  * 其余按 RFC / 通用规范自行实现。每个编码都用往返测试验证。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // ============ URL 编码 ============
 // encodeURIComponent 不编码 !*'，CTF 常见「全编码」要补齐；plus 模式把 %20 换成 +。
 function urlEncode(text, p) {
   const mode = (p && p.mode) || "standard"; // standard | full | plus
+  if (p && p.rawBytes) {
+    // 字节直通：百分号编码（RFC 3986）本就定义在字节上。对任意字节逐个判保留集，
+    // 与 encodeURIComponent(UTF-8 文本) 的输出逐字节一致（三种模式语义同样生效；
+    // 未识别的 mode 值与文本路径同判为 standard，保持两路一致）。
+    const keep = (mode === "full" || mode === "plus") ? /[A-Za-z0-9_.~-]/ : /[A-Za-z0-9_.!~*'()-]/;
+    let out = "";
+    for (const b of p.rawBytes) {
+      const c = String.fromCharCode(b);
+      out += keep.test(c) ? c : "%" + b.toString(16).toUpperCase().padStart(2, "0");
+    }
+    return mode === "plus" ? out.replace(/%20/g, "+") : out;
+  }
   let out = encodeURIComponent(text);
   if (mode === "full" || mode === "plus") {
     out = out.replace(/[!*'()]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
@@ -137,10 +150,11 @@ function unicodeEscapeDecode(text) {
 
 // ============ Quoted-Printable（RFC 2045） ============
 // 照抄 WhatsInYourClipboard codec.js；encode 补齐（原版只有 decode）。
-function qpEncode(text) {
+function qpEncode(text, p) {
  // 可打印 ASCII (33-126 除 =) + 空格(32) + Tab(9) 原样，其余 =XX
  // 注：标准 QP 还应在行尾空格前加 =，且行宽限 76。本实现做基本编码，行宽不限制（往返优先）。
-  return [...te(text)].map((b) => {
+ // QP 定义在字节上：上游交来真字节时直接编码原字节（不再先绕文本）。
+  return [...((p && p.rawBytes) || te(text))].map((b) => {
     if ((b >= 33 && b <= 126 && b !== 61) || b === 32 || b === 9)
       return String.fromCharCode(b);
     return "=" + b.toString(16).toUpperCase().padStart(2, "0");
@@ -156,7 +170,7 @@ function qpDecode(text) {
     }
     bytes.push(s.charCodeAt(i));
   }
-  return td(bytes);
+  return finishBytesDecode(bytes, { textMode: "hex", name: "quotedPrintable" });
 }
 
 // ============ UUencode ============
@@ -165,7 +179,7 @@ function qpDecode(text) {
 // compat=true 只输出数据行，且用反引号（0x60）代替空格表示 0 值 6-bit 组——
 // 空格补位会被尾空格裁剪破坏，故多数外部工具改用反引号。decode 侧两者都认。
 function uuEncode(text, p) {
-  const bytes = te(text);
+  const bytes = (p && p.rawBytes) || te(text);
   const bare = !!(p && p.compat);
   let out = bare ? "" : "begin 644 -\n";
   for (let i = 0; i < bytes.length; i += 45) {
@@ -202,7 +216,7 @@ function uuDecode(text) {
       for (const v of b) { if (n++ < count) out.push(v); }
     }
   }
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "uuencode" });
 }
 
 // ============ XXencode ============
@@ -211,7 +225,7 @@ const XX = "+-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 // compat=true 只输出数据行（含长度首字符），省去 begin/end 信封与 + 终止行——
 // 外部工具多只给数据行。decode 侧一直跳过 begin/end，故仅 encode 需要该开关。
 function xxEncode(text, p) {
-  const bytes = te(text);
+  const bytes = (p && p.rawBytes) || te(text);
   const bare = !!(p && p.compat);
   let out = bare ? "" : "begin 644 -\n";
   for (let i = 0; i < bytes.length; i += 45) {
@@ -248,31 +262,14 @@ function xxDecode(text) {
       for (const x of b) { if (n++ < count) out.push(x); }
     }
   }
-  return td(out);
-}
-
-// ============ JSFuck（decode 优先） ============
-// JSFuck 只用 []!+ 六字符构造 JS 表达式。decode 用 Function 沙箱执行（不直接 eval）。
-// 安全：先严格校验字符集，再 Function 构造；本地工具，风险可控。
-function jsFuckDecode(text) {
-  const s = text.trim();
-  if (!s) return "";
-  if (!/^[\[\]()!+\s]+$/.test(s)) {
-    throw new Error("JSFuck 只含 []()!+ 六字符");
-  }
-  try {
- // Function 沙箱：严格模式、不传 this/args，返回表达式结果
-    const fn = new Function('"use strict"; return (' + s + ');');
-    const r = fn();
-    return typeof r === "string" ? r : String(r);
-  } catch (e) {
-    throw new Error("JSFuck 执行失败: " + e.message);
-  }
+  return finishBytesDecode(out, { textMode: "hex", name: "xxencode" });
 }
 
 // ---- 注册 ----
 register({
   id: "url", cat: "text", name: "URL 编码", desc: "RFC 3986 百分号编码（standard/full/plus 三模式）",
+  // encode 方向吃字节（百分号编码定义在字节上）；decode 的输入本来就是 %XX 文本，不吃字节。
+  acceptsBytes: true,
   params: [
     { key: "mode", label: "模式", type: "select", default: "standard",
       options: [
@@ -314,6 +311,8 @@ register({
 
 register({
   id: "quotedPrintable", cat: "text", name: "Quoted-Printable", desc: "RFC 2045（=XX 转义，软换行折叠）",
+  // encode 方向吃字节（=XX 定义在字节上）；decode 的输入本来就是 QP 文本，不吃字节。
+  acceptsBytes: true,
   encode: qpEncode, decode: qpDecode,
   detect: (t) => (/=[0-9a-fA-F]{2}/.test(t) || /=\r?\n/.test(t) ? 0.4 : 0),
 });
@@ -323,6 +322,8 @@ register({
   params: [
     { key: "compat", label: "兼容模式（仅数据行，0 值用反引号）", type: "bool", default: false },
   ],
+  // encode 方向吃字节（UU 本是二进制→文本编码）；decode 输入是 UU 文本，不吃字节。
+  acceptsBytes: true,
   encode: uuEncode, decode: uuDecode,
   detect: (t) => (/^begin\s+\d+\s+\S+/m.test(t) ? 0.7 : 0),
 });
@@ -332,14 +333,10 @@ register({
   params: [
     { key: "compat", label: "兼容模式（仅数据行，无 begin/end 信封）", type: "bool", default: false },
   ],
+  // encode 方向吃字节（XX 本是二进制→文本编码）；decode 输入是 XX 文本，不吃字节。
+  acceptsBytes: true,
   encode: xxEncode, decode: xxDecode,
   detect: (t) => (/^begin\s+\d+\s+\S+/m.test(t) && /^[+-0-9A-Za-z]/m.test(t) ? 0.5 : 0),
-});
-
-register({
-  id: "jsfuck", cat: "text", name: "JSFuck", desc: "六字符 []()!+ 构造的 JS（仅解码，Function 沙箱）",
-  decode: jsFuckDecode,
-  detect: (t) => (/^[\[\]()!+]+$/.test(t.trim()) && t.length >= 10 ? 0.6 : 0),
 });
 
 export {
@@ -349,5 +346,4 @@ export {
   qpEncode, qpDecode,
   uuEncode, uuDecode,
   xxEncode, xxDecode, XX,
-  jsFuckDecode,
 };

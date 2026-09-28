@@ -66,7 +66,7 @@ function injectStyle() {
   color: var(--on-surface, #f1e0d9);
   font-family: var(--font, "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif);
   opacity: 1;
-  transition: opacity var(--dur-medium, 175ms) var(--ease-in, cubic-bezier(.3,0,1,1));
+  transition: opacity var(--dur-medium, 250ms) var(--ease-in, cubic-bezier(.3,0,1,1));
 }
 .load-screen.load-closing { opacity: 0; }
 
@@ -97,7 +97,7 @@ function injectStyle() {
   width: 0%;
   border-radius: var(--r-full, 999px);
   background: var(--primary, #f0b3a7);
-  transition: width var(--dur-medium, 175ms) var(--ease-out, cubic-bezier(0,0,0,1));
+  transition: width var(--dur-medium, 250ms) var(--ease-out, cubic-bezier(0,0,0,1));
 }
 .load-meta {
   display: flex;
@@ -108,10 +108,6 @@ function injectStyle() {
 }
 .load-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .load-pct { font-variant-numeric: tabular-nums; margin-left: var(--sp-3, 12px); flex: 0 0 auto; }
-
-@media (prefers-reduced-motion: reduce) {
-  .load-screen, .load-bar-fill { transition: none; }
-}
 `;
   document.head.append(el("style", { id: STYLE_ID }, css));
 }
@@ -154,7 +150,7 @@ export function setLoadingProgress(pct, label) {
   }
 }
 
-/** 淡出并移除遮罩（opacity 过渡 + 定时移除，仿 envPanel exp-closing 175ms）。 */
+/** 淡出并移除遮罩（opacity 过渡 + 定时移除，等待时长与出场动画 --dur-4 = 250ms 对齐）。 */
 export function hideLoadingScreen() {
   if (!_screen) return;
   const scr = _screen;
@@ -164,5 +160,5 @@ export function hideLoadingScreen() {
     if (scr && scr.parentNode) scr.remove();
     if (scr === _screen) { _screen = null; _fill = null; _label = null; _pct = null; }
     _removeTimer = 0;
-  }, 200);  // 略高于 --dur-medium(175ms)，等过渡跑完再摘
+  }, 250);  // 与出场过渡时长 --dur-medium（= --dur-4，250ms）对齐，等过渡跑完再摘
 }

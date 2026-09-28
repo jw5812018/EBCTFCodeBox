@@ -158,25 +158,23 @@ function makeLaunchOp({ id, cat, name, tool, blurb }) {
   });
 }
 
+// watermarkhLaunch（watermarkH 水印 GUI exe）2026-09-25 删除：其算法（频域加性水印，
+// 图案直接当频谱叠加 + 幅度谱提取）已纯前端复刻为内置 op watermarkhFft，exe 与 bridge 白名单条目
+// 一并退场（产品裁决「都成功复刻了」）。残留的 watermarkH 产物样本仍由 watermarkhFft 直接解出。
 makeLaunchOp({
-  id: "watermarkhLaunch", cat: "bridgeStego", tool: "watermarkh",
-  name: "watermarkH · 水印",
-  blurb: "吾爱出品的图像水印隐写工具。",
-});
-makeLaunchOp({
-  id: "jphswinLaunch", cat: "bridgeStego", tool: "jphswin",
+  id: "jphswinLaunch", cat: "stegoFile", tool: "jphswin",
   name: "JPHS · JPEG 隐写",
   blurb: "JPHS for Windows（jphide/jpseek），把数据藏进 JPEG。",
 });
 // ntfsstreamsLaunch（NTFS 数据流 GUI exe）2026-09-13 删除：纯 JS adsTool（forensic 类）已
-// 完整替代检测/提取/删除/添加四能力，bridgeForensic 分类随之撤销（恒烈裁决）。
+// 完整替代检测/提取/删除/添加四能力，bridgeForensic 分类随之撤销（产品裁决）。
 makeLaunchOp({
-  id: "openpuffLaunch", cat: "bridgeStego", tool: "openpuff",
+  id: "openpuffLaunch", cat: "stegoFile", tool: "openpuff",
   name: "OpenPuff · 多载体",
   blurb: "OpenPuff 多载体隐写（图/音/视/PDF/flash 等），支持多层密码。",
 });
 makeLaunchOp({
-  id: "oursecretLaunch", cat: "bridgeStego", tool: "oursecret",
+  id: "oursecretLaunch", cat: "stegoFile", tool: "oursecret",
   name: "OurSecret · 隐写",
   blurb: "OurSecret GUI 隐写工具，私有格式无法纯前端复刻。",
 });

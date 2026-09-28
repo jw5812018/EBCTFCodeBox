@@ -130,7 +130,7 @@ function formatResult(res, srcName) {
 
 register({
   id: "pycExeDecompile",
-  cat: "forensic",
+  cat: "filefmt",
   name: "pyc/exe 反编（本地桥）",
   desc: "拖入 .pyc 或 PyInstaller 打包 .exe，经本地 bridge.py 自动判 Python 版本并反编为源码（uncompyle6/decompyle3，3.9+ 走 pylingual 实验链路；仅 Windows，需先起 python bridge.py）",
   params: [

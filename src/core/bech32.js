@@ -142,7 +142,12 @@ function bech32Encode(hrp, payloadBytes) {
 
 // decode: bech32 字符串 → { hrp, payload bytes }
 function bech32Decode(str) {
-  const s = String(str).toLowerCase();
+  const raw = String(str);
+ // BIP173：解码器 MUST NOT 接受混合大小写串（全大写/全小写均可；此前直接 toLowerCase 会静默接受混合串）
+  if (raw !== raw.toLowerCase() && raw !== raw.toUpperCase()) {
+    throw new Error("Bech32 不接受混合大小写（BIP173）");
+  }
+  const s = raw.toLowerCase();
   if (s.length < 8 || s.length > 90) {
     throw new Error("Bech32 长度须 8-90（实为 " + s.length + "）");
   }

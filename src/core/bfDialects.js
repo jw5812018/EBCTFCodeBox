@@ -1,5 +1,5 @@
 /*
- * bfDialects.js — Brainfuck 衍生方言（cat:'fancy'）。
+ * bfDialects.js — Brainfuck 衍生方言（cat:'esolang'）。
  *
  * 对标 bftools.exe 的 BF 方言转换。BrainFuck/Ook 已在 fancy2.js 注册
  * 本文件只做 Ook 之外的衍生方言，opId 独立：

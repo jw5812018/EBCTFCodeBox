@@ -20,9 +20,18 @@
  * 源码内不可见字符一律 \u 转义书写，避免污染本文件。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode, decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 const te = new TextEncoder();
-const tdUtf8 = (bytes) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(bytes));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // 通用 UTF-8 ↔ base64（循环构造，避免 spread 栈溢出）
 function b64Enc(bytes) {
@@ -180,7 +189,7 @@ function zeroWidthDecode(text, p = {}) {
   if (p.binary) {
     const u8 = zwDecodeBytes(zw, chars);
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(u8);
+      return _decodeUtf8Fatal(u8);
     } catch {
       return {
         text: "(二进制负载，" + u8.length + " 字节，点击下载)",
@@ -268,7 +277,7 @@ function zwTagsDecode(text) {
     if (cp >= 0xe0000 && cp <= 0xe00ff) bytes.push(cp - 0xe0000);
   }
   if (!bytes.length) throw new Error("未检测到 Unicode Tag 字符（U+E0000 平面）");
-  return tdUtf8(bytes);
+  return finishBytesDecode(bytes, { textMode: "hex", name: "zwTags" });
 }
 
 // ============================================================
@@ -293,7 +302,7 @@ function zwVarSelDecode(text) {
     else if (cp >= 0xe0100 && cp <= 0xe01ef) bytes.push(cp - 0xe0100 + 16);
   }
   if (!bytes.length) throw new Error("未检测到变体选择器（U+FE00-FE0F / U+E0100-E01EF）");
-  return tdUtf8(bytes);
+  return finishBytesDecode(bytes, { textMode: "hex", name: "zwVarSel" });
 }
 
 // ============================================================
@@ -353,7 +362,7 @@ function emojiSubstDecode(text, p = {}) {
     }
     b64 += text[i++]; // 非 emoji 原样保留
   }
-  return tdUtf8(b64Dec(b64));
+  return finishBytesDecode(b64Dec(b64), { textMode: "hex", name: "emojiSubst" });
 }
 
 // ============================================================
@@ -590,7 +599,7 @@ function tadpoleDecodeTadpole(s) {
 // 注册
 // ============================================================
 register({
-  id: "zeroWidth", cat: "stego", name: "零宽字符隐写",
+  id: "zeroWidth", cat: "stegoText", name: "零宽字符隐写",
   desc: "Kei Misawa MIT：载体文本夹带隐藏消息，radix-N 零宽字符。默认 U+200C/200D/202C/FEFF（radix-4），可切换扩展字符集缩短编码",
   params: [
     { key: "cover", label: "载体文本", type: "text", default: "", placeholder: "编码时的可见外壳文本，可空" },
@@ -610,14 +619,14 @@ register({
 });
 
 register({
-  id: "zeroChar", cat: "stego", name: "零宽摩斯密码",
+  id: "zeroChar", cat: "stegoText", name: "零宽摩斯密码",
   desc: "明文→摩斯→零宽 U+200B(/)U+200C(.)U+200D(-)，CJK 走 \\uXXXX",
   encode: zeroCharEncode, decode: zeroCharDecode,
   detect: (t) => ([...t].some((c) => c === ZC_SLASH || c === ZC_DOT || c === ZC_DASH) ? 0.3 : 0),
 });
 
 register({
-  id: "zwTags", cat: "stego", name: "Unicode Tag 走私",
+  id: "zwTags", cat: "stegoText", name: "Unicode Tag 走私",
   desc: "U+E0000 平面隐藏 ASCII/UTF-8 字节，LLM prompt 注入常用载体",
   params: [{ key: "cover", label: "载体文本", type: "text", default: "", placeholder: "可见外壳文本，可空" }],
   encode: zwTagsEncode, decode: zwTagsDecode,
@@ -625,7 +634,7 @@ register({
 });
 
 register({
-  id: "zwVarSel", cat: "stego", name: "变体选择器隐写",
+  id: "zwVarSel", cat: "stegoText", name: "变体选择器隐写",
   desc: "Paul Butler 2024：U+FE00-FE0F / U+E0100-E01EF 附加任意字节流",
   params: [{ key: "cover", label: "载体文本", type: "text", default: "", placeholder: "可见外壳文本，可空" }],
   encode: zwVarSelEncode, decode: zwVarSelDecode,
@@ -633,7 +642,7 @@ register({
 });
 
 register({
-  id: "emojiSubst", cat: "stego", name: "emoji 替换隐写",
+  id: "emojiSubst", cat: "stegoText", name: "emoji 替换隐写",
   desc: "emoji-aes 替换层：base64 字母表 ↔ 65 emoji 表 + rotation（不含 AES）",
   params: [{ key: "rotation", label: "旋转", type: "number", default: 0, placeholder: "0-64" }],
   encode: emojiSubstEncode, decode: emojiSubstDecode,
@@ -641,7 +650,7 @@ register({
 });
 
 register({
-  id: "tadpole", cat: "stego", name: "蝌蚪文",
+  id: "tadpole", cat: "stegoText", name: "蝌蚪文",
   desc: "蝌蚪文加解密（U+06D6-U+06EC 装饰符 + checksum + b64 双格式）",
   params: [
     { key: "format", label: "格式", type: "select", default: "tadpole",

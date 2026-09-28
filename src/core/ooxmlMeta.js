@@ -1,5 +1,5 @@
 /*
- * ooxmlMeta.js — OOXML 元数据提取（P1 批，cat:'forensic'，单向 run）。
+ * ooxmlMeta.js — OOXML 元数据提取（P1 批，cat:'filefmt'，单向 run）。
  *
  * 解决什么：docx / xlsx / pptx 本质是 ZIP 容器，元数据在 docProps/ 下的
  * 三个 XML 部件里：core.xml（标题/作者/时间）、app.xml（程序/公司/页数）、
@@ -321,7 +321,7 @@ export function makeOoxml(parts) {
 // ============ register ============
 
 register({
-  id: "ooxmlMeta", cat: "forensic", name: "OOXML 元数据提取",
+  id: "ooxmlMeta", cat: "filefmt", name: "OOXML 元数据提取",
   desc: "docx/xlsx/pptx 的元数据一键挖出：docProps 下 core.xml（标题/作者/时间）·app.xml（程序/公司）·custom.xml（自定义属性）全部键值对。ZIP 容器直解（stored/deflate），拼接件前缀自动修正，作者名/公司名/隐藏备注常是取证线索",
   params: [
     { key: "inputEnc", label: "输入编码（文本输入时）", type: "select", default: "auto",

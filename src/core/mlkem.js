@@ -503,7 +503,7 @@ register({
   run: (t, p = {}) => {
     const r = mlkemKeyGenBytes(p.set, p.d, p.z);
     const s = PARAM_SETS[r.set];
-    // T362 产物协议（2026-09-02）：ek / dk 分开交付下载按钮（恒烈指示），hex 文本文件。
+    // T362 产物协议（2026-09-02）：ek / dk 分开交付下载按钮（产品裁决），hex 文本文件。
     return {
       text: [
         `参数集: ML-KEM-${r.set} (k=${s.k}, η1=${s.eta1}, η2=${s.eta2}, du=${s.du}, dv=${s.dv})`,

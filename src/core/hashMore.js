@@ -485,7 +485,7 @@ function gost94Hash(msg, sboxName) {
 }
 
 // ============================================================
-// 注册（件内自注册，main.js/registerAll.js/i18n 主表由主开发归并）
+// 注册（件内自注册，main.js/registerAll.js/i18n 主表由开发方归并）
 // ============================================================
 const INPUT_PARAM = { key: "inputType", label: "输入编码", type: "select", default: "text", options: ["text", "hex"] };
 

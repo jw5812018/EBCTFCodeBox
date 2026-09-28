@@ -101,7 +101,7 @@ export default {
     tips: [
       "RS/ES 是非对称签名爆不了；header 里 alg=none 的 JWT 直接拒绝。",
       "命中后可配合 JWT 工具（token.js 的 jwt）改 payload 重签。",
-      "高熵密钥需离线 hashcat，本工具只做在线弱密钥。",
+      "本工具只做弱密钥小字典演示，不做大规模爆破——高熵密钥请用 hashcat -m 16500（https://hashcat.net）或 John the Ripper 的 JWT 格式离线跑。",
     ],
     aka: ["jwt 爆破", "jwt 密钥爆破", "jwt 破解", "jwt secret 爆破", "jwt 弱密钥", "jwt crack", "jwt dictionary attack", "hs256 爆破", "hs256 crack", "hs384", "hs512", "hmac jwt 爆破", "jwt 字典攻击", "jwt 弱口令", "json web token 爆破"],
   },

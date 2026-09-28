@@ -294,7 +294,7 @@ function renderHexView(bytes) {
 // 旧实现用 [...text] 展开，那只按 **码位**（code point）切，仅正确处理代理对，
 // **不处理组合序列**：`u̲`（U+0075 LATIN SMALL LETTER U + U+0332 COMBINING LOW LINE）
 // 会被拆成两行 —— 组合下划线脱离基字单独成行渲染，既不连续、又错位。
-// 恒烈报的 `u̲n̲d̲e̲r̲l̲i̲n̲e̲d̲` 显示异常即此。
+// 产品负责人报的 `u̲n̲d̲e̲r̲l̲i̲n̲e̲d̲` 显示异常即此。
 // 改用 Intl.Segmenter 按 **字素簇**（grapheme cluster, UAX #29）切分：
 // 基字 + 其后所有组合记号算一个用户感知字符，整簇一起渲染，组合符自然贴回基字。
 // 兼容：Chromium 87+ / Firefox 125+ / Safari 14.1+ 均支持；不支持时降级回码位切分
@@ -804,7 +804,7 @@ async function fontDataUrl(url) {
 // 背景：导出 SVG/PNG 时 foreignObject 是独立文档，不吃页面 CSS。旧实现只把
 //   .uv-md-body 的少量计算样式固化成内联 style，KaTeX 公式依赖的 .katex 布局规则
 //   （position/width/white-space/display 等）与 KaTeX 字体全没带进去 → 公式塌陷，
-//   只剩 exportBg() 的背景色（白天白块/黑夜黑块）。恒烈 2026-08-26 拍板：所见即所得。
+//   只剩 exportBg() 的背景色（白天白块/黑夜黑块）。产品负责人 2026-08-26 拍板：所见即所得。
 // 修法：把 katex.min.css 的布局规则原文注入 SVG <style>，并按公式实际用到的
 //   font-family 内嵌对应 woff2（data URL），让 foreignObject 渲染结果与页面一致。
 // 体积：仅内嵌扫描到的 family；纯文本/无公式场景不注入，SVG 保持 <200KB 判据。
@@ -938,20 +938,20 @@ function renderRenderAllView(text) {
   wrap.append(el("div", { class: "uv-render-sec-desc" }, tt("ui.uv.renderAllDesc")));
 
   // MT77①：码位描述编码转换开关（默认开；关 = 原文按原样渲染，互不污染）。
-  // 常驻渲染区上方——未点「分析」时也可见可切，不再藏在渲染结果里（恒烈要求提前出现）。
+  // 常驻渲染区上方——未点「分析」时也可见可切，不再藏在渲染结果里（产品裁决提前出现）。
   const cpDescLabel = el("label", { class: "uv-cp-toggle" });
   const cpDescChk = el("input", { type: "checkbox" });
   cpDescChk.checked = uvState.renderall.cpDesc;
-  cpDescLabel.append(cpDescChk, el("span", {}, tt("ui.uv.cpDescV2"))); // 示例换「力」（恒烈：一字不明显）
+  cpDescLabel.append(cpDescChk, el("span", {}, tt("ui.uv.cpDescV2"))); // 示例换「力」（一字不明显）
   wrap.append(cpDescLabel);
 
-  // 渲染舞台（显示区）：独立卡片，与下方导出按钮行明确分区（恒烈要求显示部分与按钮空间明显区分）。
+  // 渲染舞台（显示区）：独立卡片，与下方导出按钮行明确分区（产品裁决显示部分与按钮空间明显区分）。
   // CSS var(--font-content) = 天珩字库，md 结构 + 天珩字形合并生效。
   const body = el("div", { class: "uv-md-body uv-cheon-body" });
   const stage = el("div", { class: "uv-render-stage" }, body);
   wrap.append(stage);
 
-  // T360：保存渲染结果（SVG / PNG）+ 内嵌字体开关 + PNG 倍率 —— 全部放显示区下方（恒烈拍板）
+  // T360：保存渲染结果（SVG / PNG）+ 内嵌字体开关 + PNG 倍率 —— 全部放显示区下方（产品裁决）
   const exportRow = el("div", { class: "uv-export-row" });
   const embedChk = el("input", { type: "checkbox", id: "uv_embed_font" });
   embedChk.checked = uvState.renderall.embedFont;
@@ -1238,7 +1238,7 @@ function makeCell(cp, cls) {
 }
 
 // ============ 档1：正查（字 → 分解树）============
-// 输入统一走上方共享输入框（恒烈要求：拼字的输入就是上方输入框，不再另起一个）
+// 输入统一走上方共享输入框（产品裁决：拼字的输入就是上方输入框，不再另起一个）
 function renderIdsFwdPane(idx) {
   const pane = el("div", { class: "uv-ids-pane" });
   const results = el("div", { class: "uv-ids-results" });
@@ -1488,7 +1488,7 @@ function ensureIdsCss() {
   (document.head || document.documentElement).append(style);
 }
 const IDS_CSS = `
-/* 拼字区整体呼吸感（恒烈两轮点名「挤」）：块间距 sp-4、控件行 sp-3、格子/树内加大留白。
+/* 拼字区整体呼吸感（产品负责人两轮点名「挤」）：块间距 sp-4、控件行 sp-3、格子/树内加大留白。
  * ⚠ .uv-ids-body 才是实际容器（renderIdsBody 把 描述/子页签/结果面板 塞在这里）——
  *   上轮只调了 .uv-ids-wrap 的 gap 无效（它只包 body 一个子节点），描述与三个按钮仍贴死。 */
 .uv-ids-wrap{display:flex;flex-direction:column;}
@@ -1709,12 +1709,12 @@ export function renderUniversalViewer(container) {
     onChange: () => { uvState.input = input.value; run(); },
     exportName: "charviewer-input.txt",
   });
- // 输出框工具条已随「文本输出」区一起取消（恒烈 2026-08-26 拍板）。
+ // 输出框工具条已随「文本输出」区一起取消（产品负责人 2026-08-26 拍板）。
 
   wrap.append(inToolbar, input, runBtn, statBar, tabBar, out);
   container.append(wrap);
 
  // 初始即渲染当前 tab 骨架：渲染全部的「转换 Unicode 描述编码」开关、拼字子页签
- // 在未点「分析」时就可见（恒烈：控件不该等渲染完才出现）。
+ // 在未点「分析」时就可见（产品负责人：控件不该等渲染完才出现）。
   rerender();
 }

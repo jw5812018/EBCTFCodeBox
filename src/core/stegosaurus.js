@@ -29,7 +29,7 @@
  * - 件内自注册（文件末尾 register(op)）。
  * - 报告无 emoji，用黑白几何符号（● ✓ ← ▸ × ✗ ⚠）。
  *
- * 契约：register({id:'stegosaurus', cat:'forensic', name, desc, params, run})。
+ * 契约：register({id:'stegosaurus', cat:'stego', name, desc, params, run})。
  * run(text, p) → 报告文本。输入为 .pyc 的 hex / base64（parseInput 自动判别）。
  *
  * 参考（真实来源，非编造）：
@@ -666,7 +666,7 @@ function safeDate(ts) {
 // ============================================================
 register({
   id: "stegosaurus",
-  cat: "forensic",
+  cat: "stegoFile",
   name: "Stegosaurus pyc 隐写检测",
   desc: "解析 .pyc 头定 Python 版本 + 递归解 marshal code object，扫描字符串常量藏的 flag、检测 co_lnotab 行号表异常并抽 LSB bit 流：纯前端静态分析，不执行 pyc",
   params: [

@@ -24,6 +24,7 @@
  * 契约：register({ id:"sosemanuk", cat:"modern", name, desc, params, encode, decode })。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ---- 32 位工具 ----
 const M32 = 0xffffffff;
@@ -328,7 +329,7 @@ function parseHex(s, name, expectLen) {
 }
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 const bytesToHex = (bytes) => { let s = ""; for (const b of bytes) s += (b & 0xff).toString(16).padStart(2, "0"); return s; };
 
 // encode：文本 → 密文 hex（明文 ⊕ 密钥流）
@@ -350,7 +351,7 @@ function sosemanukDecode(text, p = {}) {
   const ks = sosemanukKeystream(key, iv, data.length);
   const out = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = data[i] ^ ks[i];
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "sosemanuk" });
 }
 
 // ---- 载入自校验：eSTREAM 官方向量 2 组 + 往返 ----

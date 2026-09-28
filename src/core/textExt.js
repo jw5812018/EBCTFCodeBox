@@ -17,12 +17,14 @@
  * 与 text.js 7 项不重复（url/htmlEntity/unicodeEscape/quotedPrintable/uuencode/xxencode/jsfuck 已有）。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode, bytesToEscapedText } from "./bytesIo.js";
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // ============ utf7（RFC 2152，参考 WhatsInYourClipboard baseExtra.js）============
 const UTF7_B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const UTF7_B64_SET = new Set(UTF7_B64);   // 修改版 BASE64 字符集：判定移位序列在哪终止
 function utf16beBytes(str) {
   const out = [];
  // 用 codePointAt 处理补充平面字符（拆代理对）
@@ -96,14 +98,29 @@ function utf7Encode(text) {
 function utf7Decode(text) {
   let out = "";
   let i = 0;
-  while (i < text.length) {
-    if (text[i] === "+") {
-      const end = text.indexOf("-", i + 1);
-      const seg = end === -1 ? text.slice(i + 1) : text.slice(i + 1, end);
-      if (seg === "") out += "+";
-      else out += bytesToUtf16be(mb64Decode(seg, UTF7_B64));
-      i = end === -1 ? text.length : end + 1;
-    } else { out += text[i]; i++; }
+  const n = text.length;
+  while (i < n) {
+    const ch = text[i];
+    if (ch !== "+") { out += ch; i++; continue; }
+ // 修正（RFC 2152 §3 修改版 BASE64 的终止规则）：先收集 '+' 之后**连续**的 BASE64 字符，再定终止：
+ //   · 显式 '-'        → 终止并消费该 '-'（"+-" 即字面 '+'）
+ //   · 首个非 BASE64 字符 → 隐式终止，该字符**不消费**，交回主循环按直接字符原样输出
+ //   · 到达串尾         → 终止
+ // 旧实现用 text.indexOf("-", i+1) 找终止：① 串里没有 '-' 时把整段吞到串尾，base64 段后面的直接
+ // 字符全部丢失（"+ImIDkQ. B-C" 会连 ". B-C" 一起被当成 base64 吃掉）；② 串里别处的 '-'（如 B-C
+ // 的 '-'）会被误当终止，把中间的直接字符混进 base64 段。两者都是 RFC 2152 明确允许的「省略终止 -」
+ // 合法形态，属实现缺陷而非输入非法。
+    let j = i + 1;
+    while (j < n && UTF7_B64_SET.has(text[j])) j++;
+    const seg = text.slice(i + 1, j);
+    if (seg) {
+      const bytes = mb64Decode(seg, UTF7_B64);
+      // 段内凑不出一个完整 UTF-16 码元（< 2 字节）⇒ 这是 RFC 未定义的 ill-formed 形态（段被截断）。
+      // 此时把 "+" 与段原样交回，绝不静默丢内容；合法段（≥1 个码元）行为不变。
+      if (bytes.length >= 2) out += bytesToUtf16be(bytes);
+      else out += "+" + seg;
+    } else out += "+";   // 空段（'+' 后既非 BASE64 也非 '-'）：按字面 '+' 宽容处理，不抛错、不吞后续字符
+    i = text[j] === "-" ? j + 1 : j;
   }
   return out;
 }
@@ -232,15 +249,15 @@ function punycodeDecode(text) {
 // ============ jsHex（\xXX 转义，与 unicodeEscape \uXXXX 不同）============
 function jsHexEncode(text, p) {
   const mode = (p && p.mode) || "nonascii";
-  const bytes = te(text);
+  // 字节直通：\xXX 本就是字节级转义，上游真字节直接转（不经文本）。
+  const bytes = (p && p.rawBytes) || te(text);
   if (mode === "all") {
     return [...bytes].map(b => "\\x" + b.toString(16).padStart(2, "0")).join("");
   }
- // nonascii：仅非可打印 ASCII 和非 ASCII 字节转义
-  return [...bytes].map(b => {
-    if (b >= 0x20 && b <= 0x7e) return String.fromCharCode(b);
-    return "\\x" + b.toString(16).padStart(2, "0");
-  }).join("");
+  // nonascii：仅非可打印 ASCII 和非 ASCII 字节转义。
+  // 反斜杠（0x5C）必须一并转义 —— 否则数据里本来就有的 "\x41" 会被 jsHexDecode 读成 "A"，
+  // 编码/解码不再是无损的一对（原先缺这一条，实测 encode("\x41")→decode 得 "A"）。
+  return bytesToEscapedText(bytes);
 }
 function jsHexDecode(text) {
  // 解析 \xXX 转义，其余字符原样保留
@@ -255,7 +272,7 @@ function jsHexDecode(text) {
       i++;
     }
   }
-  return td(bytes);
+  return finishBytesDecode(bytes, { textMode: "hex", name: "jsHex" });
 }
 
 // ============ mixHexOctBin（0x/0b/0o 混排解码）============
@@ -385,8 +402,8 @@ function leetDecode(text) {
 // ============ netbios（半字节 + A 偏移）============
 // 每字节拆高低 4 位，每个 4 位值 + 'A' (65) → 字符
 // 例：'A'(0x41) → 高4=4→'E', 低4=1→'B' → "EB"
-function netbiosEncode(text) {
-  const bytes = te(text);
+function netbiosEncode(text, p) {
+  const bytes = (p && p.rawBytes) || te(text);
   let out = "";
   for (const b of bytes) {
     const hi = (b >> 4) & 0xf;
@@ -405,7 +422,7 @@ function netbiosDecode(text) {
     const lo = (s[i + 1].toUpperCase().charCodeAt(0) - 65) & 0xf;
     bytes.push((hi << 4) | lo);
   }
-  return td(bytes);
+  return finishBytesDecode(bytes, { textMode: "hex", name: "netbios" });
 }
 
 // ============ caretMdecode（^X / M-X 控制字符表示法）============
@@ -414,8 +431,9 @@ function netbiosDecode(text) {
 // 双向：encode 输入字节流 → ^X / M-X 表示；decode 反之
 // 注：处理单字节流（latin1），每字符 charCode & 0xff 当一个字节
 // 这样含高位字节的字节流能正确往返（与 UTF-8 解码语义不同）。
-function caretMEncode(text) {
-  const bytes = [...text].map(c => c.charCodeAt(0) & 0xff);
+function caretMEncode(text, p) {
+  // 字节直通：Caret/M 记法本就是字节级表示，上游真字节直接编（文本路径仍按 latin1 字符取低 8 位）。
+  const bytes = (p && p.rawBytes) || [...text].map(c => c.charCodeAt(0) & 0xff);
   let out = "";
   for (const b of bytes) {
     if (b === 0) {
@@ -595,6 +613,8 @@ register({
       ],
     },
   ],
+  // encode 方向吃字节（\xXX 是字节级转义）；decode 输入是转义文本，不吃字节。
+  acceptsBytes: true,
   encode: jsHexEncode, decode: jsHexDecode,
   detect: (t) => (/\\x[0-9a-fA-F]{2}/.test(t) ? 0.5 : 0),
 });
@@ -621,6 +641,8 @@ register({
 register({
   id: "netbios", cat: "text", name: "NetBIOS 编码",
   desc: "半字节 + A 偏移（每字节拆 4 位 + 'A'）",
+  // encode 方向吃字节（半字节映射定义在字节上）；decode 输入是 A-P 文本，不吃字节。
+  acceptsBytes: true,
   encode: netbiosEncode, decode: netbiosDecode,
   detect: (t) => (/^[A-Pa-p]+$/.test(t.replace(/\s/g, "")) && t.replace(/\s/g, "").length % 2 === 0 && t.length >= 4 ? 0.3 : 0),
 });
@@ -628,6 +650,8 @@ register({
 register({
   id: "caretMdecode", cat: "text", name: "Caret/M 控制字符",
   desc: "^X = Ctrl+X（& 0x1F），M-X = Meta-X（| 0x80）",
+  // encode 方向吃字节（Caret/M 记法定义在字节上）；decode 输入是 ^X/M-X 文本，不吃字节。
+  acceptsBytes: true,
   encode: caretMEncode, decode: caretMDecode,
   detect: (t) => (/\^[\x41-\x5a\x5f?@]/.test(t) || /M-[\x20-\x7e]/.test(t) ? 0.4 : 0),
 });

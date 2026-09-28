@@ -11,7 +11,8 @@
  */
 import { register } from "./registry.js";
 
-const te = (s) => new TextEncoder().encode(s);
+// 文本 → UTF-8 字节；已是 Uint8Array 则原样直通（F02：哈希族要吃真字节）
+const te = (s) => (s instanceof Uint8Array ? s : new TextEncoder().encode(s));
 const toHex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 const toHexUpper = (bytes) => toHex(bytes).toUpperCase();
 
@@ -215,32 +216,38 @@ async function hmac(algo, key, text) {
 // ============ 注册 ============
 register({
   id: "md5", cat: "hash", name: "MD5", family: "md", familyLabel: "MD5", desc: "MD5 消息摘要（128 位，RFC 1321，纯 JS）",
-  run: (t) => md5(t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => md5(p?.rawBytes ?? t),
 });
 
 register({
   id: "md4", cat: "hash", name: "MD4", family: "md", familyLabel: "MD4", desc: "MD4 消息摘要（128 位，RFC 1320，纯 JS，NTLM 基础）",
-  run: (t) => md4(t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => md4(p?.rawBytes ?? t),
 });
 
 register({
   id: "sha1", cat: "hash", name: "SHA-1", family: "sha", familyLabel: "SHA-1", desc: "SHA-1 消息摘要（160 位，WebCrypto）",
-  run: async (t) => sha("SHA-1", t),
+  acceptsBytes: true, textTransit: true,
+  run: async (t, p) => sha("SHA-1", p?.rawBytes ?? t),
 });
 
 register({
   id: "sha256", cat: "hash", name: "SHA-256", family: "sha", familyLabel: "SHA-256", desc: "SHA-256 消息摘要（256 位，WebCrypto）",
-  run: async (t) => sha("SHA-256", t),
+  acceptsBytes: true, textTransit: true,
+  run: async (t, p) => sha("SHA-256", p?.rawBytes ?? t),
 });
 
 register({
   id: "sha384", cat: "hash", name: "SHA-384", family: "sha", familyLabel: "SHA-384", desc: "SHA-384 消息摘要（384 位，WebCrypto）",
-  run: async (t) => sha("SHA-384", t),
+  acceptsBytes: true, textTransit: true,
+  run: async (t, p) => sha("SHA-384", p?.rawBytes ?? t),
 });
 
 register({
   id: "sha512", cat: "hash", name: "SHA-512", family: "sha", familyLabel: "SHA-512", desc: "SHA-512 消息摘要（512 位，WebCrypto）",
-  run: async (t) => sha("SHA-512", t),
+  acceptsBytes: true, textTransit: true,
+  run: async (t, p) => sha("SHA-512", p?.rawBytes ?? t),
 });
 
 register({
@@ -255,22 +262,26 @@ register({
       { value: "SHA-512", label: "SHA-512" },
     ] },
   ],
-  run: async (t, p) => hmac((p && p.algo) || "SHA-256", (p && p.key) || "", t),
+  acceptsBytes: true, textTransit: true,
+  run: async (t, p) => hmac((p && p.algo) || "SHA-256", (p && p.key) || "", p?.rawBytes ?? t),
 });
 
 register({
   id: "crc32", cat: "hash", name: "CRC32", family: "crc", familyLabel: "CRC-32/ISO-HDLC", desc: "CRC32 校验（IEEE 802.3，查表法）",
-  run: (t) => crc32(t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => crc32(p?.rawBytes ?? t),
 });
 
 register({
   id: "crc16", cat: "hash", name: "CRC16", family: "crc", familyLabel: "CRC-16/IBM-3740", desc: "CRC16 校验（CCITT-FALSE，多项式 0x1021）",
-  run: (t) => crc16(t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => crc16(p?.rawBytes ?? t),
 });
 
 register({
   id: "ntlm", cat: "hash", name: "NTLM", desc: "NTLM 哈希（MD4 of UTF-16LE 密码，Windows 密码存储）",
-  run: (t) => ntlm(t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => ntlm(p?.rawBytes ?? t),
 });
 
 // ============ SHA3 / Keccak / SHAKE（纯 JS Keccak-f[1600]，双 32 位模拟 64 位） ============
@@ -437,25 +448,29 @@ register({
       { value: 512, label: "512" },
     ] },
   ],
-  run: (t, p) => sha3(Number((p && p.bits != null) ? p.bits : 256), t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => sha3(Number((p && p.bits != null) ? p.bits : 256), p?.rawBytes ?? t),
 });
 register({
   id: "keccak256", cat: "hash", name: "Keccak-256", desc: "Keccak-256（以太坊，padding 0x01，256 位）",
-  run: (t) => keccak256(t),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => keccak256(p?.rawBytes ?? t),
 });
 register({
   id: "shake128", cat: "hash", name: "SHAKE128", family: "shake", familyLabel: "SHAKE128", desc: "SHAKE128 可扩展输出（FIPS 202，参数：输出字节数）",
   params: [
     { key: "outLen", label: "输出字节数", type: "number", default: 32, placeholder: "输出字节数" },
   ],
-  run: (t, p) => shake(128, t, (p && p.outLen != null) ? p.outLen : 32),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => shake(128, p?.rawBytes ?? t, (p && p.outLen != null) ? p.outLen : 32),
 });
 register({
   id: "shake256", cat: "hash", name: "SHAKE256", family: "shake", familyLabel: "SHAKE256", desc: "SHAKE256 可扩展输出（FIPS 202，参数：输出字节数）",
   params: [
     { key: "outLen", label: "输出字节数", type: "number", default: 32, placeholder: "输出字节数" },
   ],
-  run: (t, p) => shake(256, t, (p && p.outLen != null) ? p.outLen : 32),
+  acceptsBytes: true, textTransit: true,
+  run: (t, p) => shake(256, p?.rawBytes ?? t, (p && p.outLen != null) ? p.outLen : 32),
 });
 
 export {

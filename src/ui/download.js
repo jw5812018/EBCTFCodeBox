@@ -1,6 +1,7 @@
 import { t } from "../i18n/index.js";
 import { ensureExpStyles } from "./expandableInput.js";
 import { icon } from "./icons.js";
+import { attachModalLifecycle } from "./modalLifecycle.js";
 
 export function downloadBytes(bytes, filename, mime) {
   const blob = new Blob([bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || [])], { type: mime || "application/octet-stream" });
@@ -48,18 +49,8 @@ export function cloudWarnGate(downloadFn) {
   function close() {
     if (closed) return;
     closed = true;
-    document.removeEventListener("keydown", onKey);
     overlay.classList.add("exp-closing");
-    setTimeout(() => { overlay.remove(); if (focus?.isConnected) focus.focus(); }, 175);
-  }
-  function onKey(e) {
-    if ([...document.querySelectorAll(".exp-overlay")].at(-1) !== overlay) return;
-    if (e.key === "Escape") { e.preventDefault(); close(); }
-    if (e.key === "Tab") {
-      const first = overlay.querySelector("button,input");
-      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); accept.focus(); }
-      else if (!e.shiftKey && document.activeElement === accept) { e.preventDefault(); first.focus(); }
-    }
+    setTimeout(() => { overlay.remove(); if (focus?.isConnected) focus.focus(); }, 250);
   }
   cancel.onclick = close;
   const closeButton = document.createElement("button");
@@ -77,8 +68,7 @@ export function cloudWarnGate(downloadFn) {
     close();
     downloadFn();
   };
-  overlay.addEventListener("mousedown", e => { if (e.target === overlay) close(); });
-  document.addEventListener("keydown", onKey);
   document.body.append(overlay);
+  attachModalLifecycle(overlay, { onClose: close, initialFocus: cancel, restoreFocusTo: focus });
   cancel.focus();
 }

@@ -7,8 +7,13 @@
  * 每个编码都用往返测试验证。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
-const te = (s) => new TextEncoder().encode(s);
+// 文本 → UTF-8 字节；已是 Uint8Array 则原样直通（F02：编码族要吃真字节）
+const te = (s) => (s instanceof Uint8Array ? s : new TextEncoder().encode(s));
+// 注意：解码出口**不再**直接用 td()。td 的 fatal:false 会把非法 UTF-8 静默替换成 U+FFFD
+// （例如 PNG 魔数 8950 被毁）。所有 base 家族的 decode 出口统一走 bytesIo.finishBytesDecode：
+// 合法 UTF-8 → 原样返回字符串（行为不变）；否则 → 报告「这是二进制」并交回原始字节供下载。
 const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
 
 // ============ 通用大整数 radixN（用于 base36/58/62 + 任意进制） ============
@@ -39,7 +44,7 @@ function radixNDecode(text, dict) {
   }
   const bytes = [];
   while (num > 0n) { bytes.unshift(Number(num & 0xffn)); num >>= 8n; }
-  return td([...new Array(zeros).fill(0), ...bytes]);
+  return finishBytesDecode([...new Array(zeros).fill(0), ...bytes], { name: "radixN" });
 }
 
 // ============ Base16 / Hex ============
@@ -77,7 +82,7 @@ function hexDecode(text, p) {
     if (hi < 0 || lo < 0) throw new Error("非法十六进制字符");
     bytes.push((hi << 4) | lo);
   }
-  return td(bytes);
+  return finishBytesDecode(bytes, { name: "hex" });
 }
 
 // ============ Base32（RFC 4648 / base32hex / Crockford / z-base-32 参数化） ============
@@ -128,7 +133,7 @@ function base32Decode(text, p) {
     bits += 5;
     if (bits >= 8) { bits -= 8; out.push((value >> bits) & 0xff); }
   }
-  return td(out);
+  return finishBytesDecode(out, { name: "base32" });
 }
 
 // ============ Base36（大整数） ============
@@ -167,11 +172,19 @@ function base45Decode(text, p) {
       if (idx === -1) throw new Error("非法 Base45 字符: " + chunk[k]);
       val += idx * Math.pow(45, k);
     }
-    if (chunk.length === 3) out.push((val >> 8) & 0xff, val & 0xff);
-    else if (chunk.length === 2) out.push(val & 0xff);
-    else throw new Error("Base45 长度非法（每组末尾不能只剩 1 字符）");
+    if (chunk.length === 3) {
+ // RFC 9285 §6：三字符组解码值 > 65535（FFFF）不是合法编码，MUST 拒绝。
+      // 正例 "FGW" = 65535 合法；反例 "GGW" = 65536 非法。
+      if (val > 65535) throw new Error("Base45 三字符组超出 16 位上限（>65535）: " + chunk);
+      out.push((val >> 8) & 0xff, val & 0xff);
+    } else if (chunk.length === 2) {
+ // 附带（与上处同类，可单独回退）：RFC 9285 §4 规定单字节 → 双字符组，
+      // 故双字符组解码值 > 255 亦非合法编码，§6「MUST reject any input that is not a valid encoding」覆盖之。
+      if (val > 255) throw new Error("Base45 双字符组超出 8 位上限（>255）: " + chunk);
+      out.push(val & 0xff);
+    } else throw new Error("Base45 长度非法（每组末尾不能只剩 1 字符）");
   }
-  return td(out);
+  return finishBytesDecode(out, { name: "base45" });
 }
 
 // ============ Base58（Bitcoin / Flickr / Ripple / 自定义字母表） ============
@@ -233,7 +246,7 @@ function base64Decode(text, p) {
   if (D === B64_STD) {
     while (s.length % 4) s += "=";
     const bin = atob(s);
-    return td([...bin].map((c) => c.charCodeAt(0)));
+    return finishBytesDecode([...bin].map((c) => c.charCodeAt(0)), { name: "base64" });
   }
  // 自定义码表：手工解码
   const clean = s.replace(/=+$/, "");
@@ -246,7 +259,7 @@ function base64Decode(text, p) {
     bits += 6;
     if (bits >= 8) { bits -= 8; out.push((val >> bits) & 0xff); }
   }
-  return td(out);
+  return finishBytesDecode(out, { name: "base64" });
 }
 
 // ============ Base85 / Ascii85（Adobe <~ ~>，z 压缩零组） ============
@@ -287,7 +300,7 @@ function ascii85Decode(text) {
     for (let k = 0; k < 4 - pad; k++) bytes.push(b[k]);
     i += 5;
   }
-  return td(bytes);
+  return finishBytesDecode(bytes, { name: "ascii85" });
 }
 
 // ============ Base91（basE91） ============
@@ -333,7 +346,7 @@ function base91Decode(text, p) {
     }
   }
   if (v >= 0) out.push((b + v * (2 ** n)) & 0xff);
-  return td(out);
+  return finishBytesDecode(out, { name: "base91" });
 }
 
 // ============ Base92 ============
@@ -371,7 +384,7 @@ function base92Decode(text, p) {
   }
   const out = [];
   for (let i = 0; i + 8 <= bin.length; i += 8) out.push(parseInt(bin.slice(i, i + 8), 2));
-  return td(out);
+  return finishBytesDecode(out, { name: "base92" });
 }
 
 // ============ Base100（emoji 编码，每字节 → U+1F3F7 + b） ============
@@ -387,7 +400,7 @@ function base100Decode(text) {
       out.push(((u8[i + 2] - 143) * 64 + u8[i + 3] - 128 - 55) & 0xff);
     }
   }
-  return td(out);
+  return finishBytesDecode(out, { name: "base100" });
 }
 
 // ============ 任意进制（文本 ↔ N 进制大整数，N = 2..95） ============
@@ -425,7 +438,8 @@ register({
     { key: "space", label: "空格分隔", type: "bool", default: false },
     { key: "dict", label: "自定义码表", type: "text", default: B16, placeholder: B16 },
   ],
-  encode: hexEncode, decode: hexDecode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => hexEncode(p?.rawBytes ?? t, p), decode: hexDecode,
   detect: (t) => (/^[\s]*(0x)?[0-9a-fA-F\s]+$/.test(t) && t.replace(/[^0-9a-fA-F]/g, "").length % 2 === 0 ? 0.5 : 0),
 });
 register({
@@ -442,7 +456,8 @@ register({
     { key: "padding", label: "补 =（仅 rfc4648/hex）", type: "bool", default: true },
     { key: "dict", label: "自定义码表（覆盖变体字母表）", type: "text", default: "", placeholder: B32 },
   ],
-  encode: base32Encode, decode: base32Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base32Encode(p?.rawBytes ?? t, p), decode: base32Decode,
   detect: (t) => {
     const s = t.trim();
  // 标准 base32（A-Z2-7）最强；hex(A-V)/Crockford(去 ILOU) 有区分度。
@@ -456,13 +471,15 @@ register({
 register({
   id: "base36", cat: "base", name: "Base36", desc: "大整数 0-9a-z",
   params: DICT_PARAM(B36),
-  encode: base36Encode, decode: base36Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base36Encode(p?.rawBytes ?? t, p), decode: base36Decode,
   detect: (t) => (/^[0-9a-zA-Z]+$/.test(t.trim()) && t.trim().length >= 6 ? 0.3 : 0),
 });
 register({
   id: "base45", cat: "base", name: "Base45", desc: "RFC 9285（QR 码常用）",
   params: DICT_PARAM(B45),
-  encode: base45Encode, decode: base45Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base45Encode(p?.rawBytes ?? t, p), decode: base45Decode,
   // 空格是 Base45 合法数据字符（码表索引 36），非分隔符 → 长度校验只剥 \r\n（与 decode 一致），
   // 否则 flag{hello}→"U.C5EC2RF: C*VDZ2"（含数据空格，17 字符）会被误剥成 16 → %3===1 漏认。
   detect: (t) => (/^[0-9A-Z $%*+./:=\s]+$/.test(t) && t.replace(/[\r\n]/g, "").length % 3 !== 1 ? 0.4 : 0),
@@ -481,13 +498,15 @@ register({
     },
     { key: "dict", label: "自定义码表（alphabet=custom 时生效）", type: "text", default: B58, placeholder: B58 },
   ],
-  encode: base58Encode, decode: base58Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base58Encode(p?.rawBytes ?? t, p), decode: base58Decode,
   detect: (t) => (/^[1-9A-HJ-NP-Za-km-z]+$/.test(t.trim()) && t.trim().length >= 4 ? 0.4 : 0),
 });
 register({
   id: "base62", cat: "base", name: "Base62", desc: "0-9A-Za-z（支持自定义码表）",
   params: DICT_PARAM(B62),
-  encode: base62Encode, decode: base62Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base62Encode(p?.rawBytes ?? t, p), decode: base62Decode,
   detect: (t) => (/^[0-9A-Za-z]+$/.test(t.trim()) && t.trim().length >= 6 ? 0.35 : 0),
 });
 register({
@@ -498,7 +517,8 @@ register({
     { key: "padding", label: "补齐 =（关闭即无 padding，如 JWT）", type: "bool", default: true },
     { key: "dict", label: "自定义码表", type: "text", default: B64_STD, placeholder: B64_STD },
   ],
-  encode: base64Encode, decode: base64Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base64Encode(p?.rawBytes ?? t, p), decode: base64Decode,
   detect: (t) => {
     const s = t.trim();
  // 含 -_ 是 base64url 强信号（标准 base64 无），从 detectExt2 base64url 判据并入。
@@ -511,13 +531,15 @@ register({
   params: [
     { key: "compat", label: "兼容模式（输出不带 <~ ~> 包裹）", type: "bool", default: false },
   ],
-  encode: ascii85Encode, decode: ascii85Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => ascii85Encode(p?.rawBytes ?? t, p), decode: ascii85Decode,
   detect: (t) => (/^<~.*~>$/s.test(t.trim()) ? 0.8 : 0),
 });
 register({
   id: "base91", cat: "base", name: "Base91", desc: "basE91（支持自定义码表）",
   params: DICT_PARAM(B91),
-  encode: base91Encode, decode: base91Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base91Encode(p?.rawBytes ?? t, p), decode: base91Decode,
   detect: (t) => {
     const s = t.trim();
     if (!s) return 0;
@@ -529,7 +551,8 @@ register({
 register({
   id: "base92", cat: "base", name: "Base92", desc: "13 bit 分块（支持自定义码表）",
   params: DICT_PARAM(B92),
-  encode: base92Encode, decode: base92Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base92Encode(p?.rawBytes ?? t, p), decode: base92Decode,
   detect: (t) => {
     const s = t.trim();
     if (!s || s === "~") return 0;
@@ -539,7 +562,8 @@ register({
 register({
   id: "base100", cat: "base", name: "Base100", desc: "emoji 编码（每字节 → U+1F3F7 + b）",
   family: "unicodebase", familyLabel: "base100",
-  encode: base100Encode, decode: base100Decode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => base100Encode(p?.rawBytes ?? t, p), decode: base100Decode,
   detect: (t) => {
     const s = t.trim();
     if (!s) return 0;
@@ -556,7 +580,8 @@ register({
     { key: "radix", label: "进制", type: "number", default: 36, placeholder: "2-95" },
     { key: "dict", label: "自定义码表（可选）", type: "text", default: "", placeholder: "留空用默认可打印 ASCII" },
   ],
-  encode: radixNEncodeParam, decode: radixNDecodeParam,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => radixNEncodeParam(p?.rawBytes ?? t, p), decode: radixNDecodeParam,
   detect: () => 0,  // 任意进制无法可靠识别
 });
 
@@ -575,7 +600,8 @@ function baseCustomDecode(text, p) {
 register({
   id: "baseCustom", cat: "base", name: "自定义字母表 Base", desc: "用户填字母表，进制 = 字母表长度",
   params: [{ key: "dict", label: "自定义字母表", type: "text", default: "0123456789ABCDEF", placeholder: "如 0123456789ABCDEF" }],
-  encode: baseCustomEncode, decode: baseCustomDecode,
+  acceptsBytes: true, textTransit: true,
+  encode: (t, p) => baseCustomEncode(p?.rawBytes ?? t, p), decode: baseCustomDecode,
   detect: () => 0,
 });
 export {

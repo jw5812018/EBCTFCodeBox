@@ -1,3 +1,4 @@
+import { candidateSignals, literalMatcher } from "./magic/smartCandidates.js";
 /*
  * core/exhaustiveDecode.js — 穷举式一键解码（对齐同类实现）
  *
@@ -19,6 +20,8 @@
  * 总组合数超 paramScanLimit（默认 1000）只扫 P0，防爆。
  */
 import { OPS, defaultParams, CATEGORIES } from "./registry.js";
+import { domainAdmit, isAutoCandidateExcluded } from "./magic/domain.js";
+import { runOpOffThread } from "./opRunClient.js"; // T608/S1：op 执行走常驻 Worker（见 exhaustiveDecode 内说明）
 
 // 可打印占比阈值：>= 此值视为「像明文」，UI 默认展开高亮，否则折叠为乱码。
 const PRINTABLE_THRESHOLD = 0.85;
@@ -140,6 +143,7 @@ export function formatParamsOnly(params) {
 function isStrongHit(it) { return !!(it && (it.isFlagFormat || it.matchesCrib)); }
 function isAnyHit(it) { return !!(it && (it.isFlagFormat || it.flagHit || it.matchesCrib)); }
 function hitThenPrintable(a, b) {
+  if (Number.isFinite(a.score) && Number.isFinite(b.score) && a.score !== b.score) return a.score - b.score;
   const ah = isAnyHit(a), bh = isAnyHit(b);
   if (ah !== bh) return ah ? -1 : 1;
   return b.printable - a.printable;
@@ -166,6 +170,7 @@ function printableRatio(str) {
 export function inputFeatures(text) {
   const compact = text.replace(/\s+/g, "");
   return {
+    raw: text,
     compact,
     compactLen: compact.length,
     // 非空白字符种类数（lenient 宽松档用：只判种类不判具体字符，喵呜/emoji 等变体二进制也能准入）
@@ -211,7 +216,7 @@ const OP_FINGERPRINT = {
 };
 // 字符集指纹准入：op 无指纹 → 放行；有指纹 → compact 全落入类才纳入（类外字符即排除）。
 // lenient（增强+/自定义档）：只判字符种类数 ≤ 类字符集大小，不判具体字符——
-// CTF 变体题（喵呜=01、emoji=01…）用非标准字符表也能准入参与解码（恒烈 2026-08-03）。
+// CTF 变体题（喵呜=01、emoji=01…）用非标准字符表也能准入参与解码（产品负责人 2026-08-03）。
 function fingerprintAdmit(op, f, lenient) {
   const cls = OP_FINGERPRINT[op.id];
   if (!cls) return true;                        // 未登记指纹的 op 不受此门限制
@@ -226,6 +231,10 @@ function fingerprintAdmit(op, f, lenient) {
 // 无 detect 的 op 按 cat 粗筛（保守：只在明显不适用时排除，默认纳入）。
 // lenient=true（增强/极强/最强/自定义档）：只按字符种类数放行，全部相关算法参与。
 export function coarseAdmitPlain(op, f, lenient) {
+  if (isAutoCandidateExcluded(op)) return false;
+ // 返回 null（未声明）才回退旧判据。用 f.raw 而非 f.compact——见 inputFeatures 注释。
+  const _dv = domainAdmit(op.id, f.raw);
+  if (_dv !== null) return _dv;
  // 字符集指纹优先（精确到单 op）：输入含算法字符集外字符即排除（lenient 放宽为种类数）。
   if (!fingerprintAdmit(op, f, lenient)) return false;
  // Base 系：只在输入是 base 字母表子集时纳入（含可能的 = 尾）。
@@ -248,6 +257,9 @@ const LETTER_SWEEP_OPS = new Set([
   "caesar", "trithemius", "keyboardShift", "affine", "rotSpecial",
 ]);
 export function sweepApplies(opId, f) {
+ // 不再用 isHex 一刀切——`deadbeef` 全是字母，凯撒本就该跑（旧逻辑因像 Hex 被误排）。
+  const _dv = domainAdmit(opId, f.raw);
+  if (_dv !== null) return _dv;
   if (LETTER_SWEEP_OPS.has(opId)) {
     return f.hasLetters && !f.isHex && !f.isDigits && !f.isBinary;
   }
@@ -261,7 +273,7 @@ export function sweepApplies(opId, f) {
  *
  * @param {string} input 待解码文本
  * @param {object} [opts]
- * - crib 目标特征正则源串或 RegExp（命中标记 matchesCrib，UI 高亮置顶），可空
+ * - crib 目标特征字面片段（命中标记 matchesCrib，UI 高亮置顶），可空
  * - onlyChanged true 时过滤掉「输出==输入」的无变化项（默认 false，全列）
  * - onlyPrintable true 时只保留可打印结果（默认 false）
  * @returns {Promise<{groups: Array<{cat, catName, items, algos}>, total, hits}>}
@@ -279,11 +291,7 @@ export async function exhaustiveDecode(input, opts = {}) {
   if (!text) return { groups: [], total: 0, hits: 0, tooLong: false };
   if (text.length > MAX_INPUT) return { groups: [], total: 0, hits: 0, tooLong: true, maxInput: MAX_INPUT };
 
-  let cribRe = null;
-  if (opts.crib) {
-    try { cribRe = opts.crib instanceof RegExp ? opts.crib : new RegExp(opts.crib, "i"); }
-    catch { cribRe = null; }
-  }
+  const cribRe = literalMatcher(opts.crib);
 
  // 候选 op：有 decode（双向/纯解码）或单向 run（无方向的工具，如进制转换）。
  // 纯 encode-only 的不跑（解码场景无意义）。
@@ -294,7 +302,7 @@ export async function exhaustiveDecode(input, opts = {}) {
  // excludeOps（MT72）：用户启用自定义实现的 op 也不进穷举（同 magic.js 口径）。
   const _excludeSet = opts.excludeOps == null ? null : (opts.excludeOps instanceof Set ? opts.excludeOps : new Set(opts.excludeOps));
   const excluded = (opId) => _excludeSet !== null && _excludeSet.has(opId);
-  const targets = OPS.filter((op) => (typeof op.decode === "function" || typeof op.run === "function") && !op.requiresBridge && !op.noAuto && !excluded(op.id));
+  const targets = OPS.filter((op) => (typeof op.decode === "function" || typeof op.run === "function") && !isAutoCandidateExcluded(op) && !excluded(op.id));
 
  // 预筛选（按输入特征选候选，不再全集穷举）：
  // - 有 detect 的 op：复用 detect(text) 作准入门槛，<=0 排除（对齐 magic.js）。
@@ -302,6 +310,8 @@ export async function exhaustiveDecode(input, opts = {}) {
  // - sweep 参数网格 op：无 detect（magic 靠白名单绕过），按 sweepApplies 特征跳过明显不适用的。
   const f = inputFeatures(text);
   const admitted = targets.filter((op) => {
+    const admittedDomain = domainAdmit(op.id, text);
+    if (admittedDomain !== null) return admittedDomain;
     if (typeof op.detect === "function") {
       try { return op.detect(text) > 0; }
       catch { return false; }
@@ -328,53 +338,61 @@ export async function exhaustiveDecode(input, opts = {}) {
     ? sweepGrids.filter((g) => PARAM_SCAN_P0_IDS.includes(g.op.id))
     : sweepGrids;
 
- // 并发跑，失败降级为 error 项（不 throw、不阻塞其他）。
+ // 失败降级为 error 项（不 throw、不阻塞其他）。
  // 参数扫描 op 每组参数产生一条独立候选（opId 形如 caesar(shift=3)）。
- // 分批执行——每个 task 是一个惰性 thunk，按 CHUNK 大小成批跑
- // 批间 await yieldToMain 让出主线程（避免同步 CPU 型 op 连续占满 microtask 冻结 UI）
- // 并回调 onProgress(done,total) 驱动进度条。总量小时几乎无额外开销。
-  const thunks = [
-    ...plainTargets.map((op) => async () => {
+ // T608/S1：执行端改走 opRunClient 常驻 Worker——此前同步 CPU 型 op 直接在主线程跑
+ // （即便批间已让出，单个病理级 op 仍可把主线程整块卡死十几秒，进度条/输入/CDP 全失联）。
+ // 串行执行：单 Worker 天然串行，且超时 terminate 会连坐取消全部在途任务（cancelOpRun
+ // 清空 _pending 表）——并发批次会被一个超时 op 整批报废，串行让超时只波及该 op 本身。
+ // 非 timeout 异常回主线程同步重跑一次兜底（Worker 无 DOM 等环境差异时保持旧版结果口径）；
+ // run+decode 双向 op 在 Worker 内按 run 优先（与旧版 decode 优先不同）→ 此类 op 仍走直跑。
+ // Worker 不可用环境由 opRunClient 原样回落主线程同步执行（与旧行为一致，如实降级）。
+  const opTimeoutMs = opts.opTimeoutMs ?? 5000;
+  const isDual = (op) => typeof op.run === "function" && typeof op.decode === "function";
+  const runOne = async (op, params) => {
+    const p = params ?? defaultParams(op);
+    const direct = async () => {
       const fn = op.decode || op.run;
-      try {
-        const out = await fn(text, defaultParams(op));
-        return { op, params: null, out: out == null ? "" : String(out), error: null };
-      } catch (e) {
-        return { op, params: null, out: "", error: (e && e.message) || String(e) };
+      const out = await fn.call(op, text, p);
+      return { op, params: params ?? null, out: out == null ? "" : String(out), error: null };
+    };
+    if (isDual(op)) return direct();
+    try {
+      const out = await runOpOffThread(op.id, text, p, { dir: op.decode ? "decode" : "run", timeoutMs: opTimeoutMs });
+      return { op, params: params ?? null, out: out == null ? "" : String(out), error: null };
+    } catch (e) {
+      const raw = (e && e.message) || String(e);
+      if (raw === "timeout") return { op, params: params ?? null, out: "", error: "op 超时中止（> " + opTimeoutMs + "ms）" };
+      if (raw === "cancelled") return { op, params: params ?? null, out: "", error: "cancelled" };
+      try { return await direct(); } catch (e2) {   // Worker 环境差异兜底：主线程重跑一次
+        return { op, params: params ?? null, out: "", error: (e2 && e2.message) || String(e2) };
       }
-    }),
-    ...activeSweep.flatMap(({ op, grid }) =>
-      grid.map((params) => async () => {
-        try {
-          const out = await op.decode(text, params);
-          return { op, params, out: out == null ? "" : String(out), error: null };
-        } catch (e) {
-          return { op, params, out: "", error: (e && e.message) || String(e) };
-        }
-      })
-    ),
+    }
+  };
+  const jobs = [
+    ...plainTargets.map((op) => () => runOne(op, null)),
+    ...activeSweep.flatMap(({ op, grid }) => grid.map((params) => () => runOne(op, params))),
   ];
 
   const onProgress = typeof opts.onProgress === "function" ? opts.onProgress : null;
-  const total = thunks.length;
-  const CHUNK = 32;                       // 每批并发数，批间让出主线程
+  const total = jobs.length;
   const yieldToMain = () => new Promise((r) => setTimeout(r, 0));
   const settled = [];
   let done = 0;
   if (onProgress) onProgress(0, total);   // 初值，UI 立即显示 0%
-  for (let i = 0; i < thunks.length; i += CHUNK) {
-    const batch = thunks.slice(i, i + CHUNK).map((fn) => fn());
-    const part = await Promise.allSettled(batch);
-    for (const p of part) settled.push(p);
-    done += part.length;
+  for (let i = 0; i < jobs.length; i++) {
+   // 每 op 一报（Worker 往返本身即让出主线程）；进度条由 onProgress 驱动
+    settled.push({ status: "fulfilled", value: await jobs[i]() });
+    done++;
     if (onProgress) onProgress(Math.min(done, total), total);
-    if (i + CHUNK < thunks.length) await yieldToMain();  // 让出主线程，UI 可刷新进度/响应
   }
 
   const items = [];
   let hits = 0;
+  let _pp = 0;
   for (const s of settled) {
     if (s.status === "rejected") continue; // tasks 内部已 try/catch，防御
+    if (++_pp % 128 === 0) await yieldToMain(); // T608/S1：后处理（candidateSignals/打分）也分批让出，防长任务
     const { op, params, out, error } = s.value;
     const opId = params ? formatParamTag(op.id, params) : op.id;
     const paramTag = formatParamsOnly(params); // 分组内单条分支的参数标签（如 shift=3）
@@ -392,8 +410,9 @@ export async function exhaustiveDecode(input, opts = {}) {
     const printable = printableRatio(result);
  // flag 高亮判定（三档）：flagHit=关键词命中(黄底红字)
  // isFlagFormat=完整 flag{...}(金底)，hasBrace=含花括号(浅蓝)。外加用户自定义 crib。
-    const flagHit = FLAG_RE.test(result);
-    const isFlagFormat = FLAG_FORMAT_RE.test(result);
+    const signal = candidateSignals(result, opts);
+    const flagHit = signal.signals.some(s => s.kind === "flagKeyword");
+    const isFlagFormat = signal.signals.some(s => s.kind === "flagStrong" || s.kind === "target");
     const hasBrace = result.includes("{") || result.includes("}");
     const matchesCrib = cribRe ? cribRe.test(result) : false;
     if (flagHit || matchesCrib) hits++;
@@ -402,6 +421,10 @@ export async function exhaustiveDecode(input, opts = {}) {
       ok: true, result, error: null,
       printable, empty, changed,
       flagHit, isFlagFormat, hasBrace, matchesCrib,
+      signals: signal.signals, signalAdjust: signal.adjust, signalsTruncated: signal.truncated,
+      baseScore: (1 - printable) * 100, score: (1 - printable) * 100 + signal.adjust,
+      chain: [opId], steps: [{ opId: op.id, params, paramLabel: paramTag, source: params ? "sweep" : "decode" }],
+      params, paramLabel: paramTag, source: params ? "sweep" : "decode",
     });
   }
 
@@ -449,6 +472,7 @@ export async function exhaustiveDecode(input, opts = {}) {
     }
  // 算法子组排序：有强命中的算法置顶，其次命中数多的，其次可打印最高分支
     algos.sort((a, b) => {
+      if (Number.isFinite(a.items[0]?.score) && Number.isFinite(b.items[0]?.score)) return a.items[0].score - b.items[0].score;
       if (a.hasStrongHit !== b.hasStrongHit) return a.hasStrongHit ? -1 : 1;
       if (a.hitCount !== b.hitCount) return b.hitCount - a.hitCount;
       return (b.items[0]?.printable || 0) - (a.items[0]?.printable || 0);

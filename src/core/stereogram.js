@@ -1,5 +1,5 @@
 /*
- * stereogram.js — 立体图隐写求解（Autostereogram solver，cat:'stego'）。
+ * stereogram.js — 立体图隐写求解（Autostereogram solver，cat:'image'）。
  *
  * 原理：单幅随机点立体图（SIRDS）把隐藏深度编码在相邻像素的水平位移里，
  * 用「自身与自身水平循环位移相减」即可把深度条纹显形：
@@ -14,7 +14,7 @@
  * - offset 留空 → 自动扫描（默认 -32..32 步进 2），候选缩略图网格拼图输出
  *
  * 红线：算法层零 UI 依赖；纯像素零外发；件内自注册。
- * 契约：register({ id:"stereogramSolver", cat:"stego", name, desc, run, acceptsBytes })。
+ * 契约：register({ id:"stereogramSolver", cat:"image", name, desc, run, acceptsBytes })。
  */
 import { register } from "./registry.js";
 import { decodePNG, rgbaToDataURL, dataURLToBytes, rollHorizontal } from "./stegoPixels.js";
@@ -89,7 +89,7 @@ function stereogramSolverOp(text, p = {}) {
 }
 
 register({
-  id: "stereogramSolver", cat: "stego", name: "立体图求解",
+  id: "stereogramSolver", cat: "stegoFile", name: "立体图求解",
   desc: "Autostereogram 立体图隐写求解：图像与自身水平循环位移相减（roll+diff），正确 offset 下深度条纹显形。offset 单值精确解，留空自动扫描拼图",
   params: [
     { key: "offset", label: "offset 偏移", type: "number", default: "", placeholder: "留空 = 自动扫描" },

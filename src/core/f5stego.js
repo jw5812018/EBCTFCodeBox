@@ -1,8 +1,10 @@
 /*
- * f5stego.js — F5 JPEG 隐写「提取」（cat:'stego'，run 型单向分析）。
+ * f5stego.js — F5 JPEG 隐写「编/解」（cat:'stegoFile'，encode/decode 双向）。
  *
- * 做什么：从一张 F5 隐写的 JPEG 里，用密钥抽出隐藏字节流，输出 hex + ASCII/UTF-8
- * 解读 + 诊断信息（图像结构、DCT 系数统计、F5 容量估计、flag 命中）。
+ * 做什么：decode 从一张 F5 隐写的 JPEG 里，用密钥抽出隐藏字节流，输出 hex +
+ * ASCII/UTF-8 解读 + 诊断信息（图像结构、DCT 系数统计、F5 容量估计、flag 命中）；
+ * encode 用同一密钥把消息按 f5stegojs 方言（矩阵编码 + 收缩）写入载体 JPEG
+ * 亮度分量 DCT 系数，经系数回写器（jpegRewrite.js）重新熵编码输出隐写 JPEG。
  *
  * ---- 算法来源与忠实度声明（红线：算法不许编造） ----
  * 本文件的 F5 提取逻辑「照抄」自 npm 包 f5stegojs（作者 desudesutalk
@@ -25,7 +27,7 @@
  * 因为 RC4 keystream 是顺序生成、与池总长无关（前缀一致），故置换与 gamma 完全等价。
  * · 输入：兼容项目 acceptsBytes 约定（params.rawBytes 拖入的真字节）+ hex/base64 文本。
  * · key 解析：参考直接吃整数字节数组；本实现按 keyFormat 从文本解析成字节数组。
- * · 只做「提取」；嵌入（embed/f5put/pack）未实现（工程量大且提取才是 CTF 主场景）。
+ * · 嵌入方向（encode）忠实移植参考的 _f5write/f5put 口径，见下方嵌入段说明。
  * 不确定处：F5 有多个互不兼容的实现（原始 Java F5 「F5 v1.1」的口令派生
  * stegdetect 家族等）。本 op 专门匹配 f5stegojs 系嵌入；其他实现产出的样本不保证可解。
  *
@@ -35,6 +37,7 @@
  * - 报告无 emoji，用黑白几何符号（● ✓ ▸ × ✗ ⚠）。
  */
 import { register } from "./registry.js";
+import { reencodeJpeg } from "./jpegRewrite.js";
 
 // ============================================================
 // 输入解析（hex / base64 → Uint8Array）。自备，不 import。
@@ -946,10 +949,313 @@ function f5stegoRun(text, p) {
   }
   L.push("");
   L.push("说明:");
-  L.push("  · 本 op 只做 F5 提取（run 型），纯本地计算、零外发。");
+  L.push("  · decode 方向：纯本地计算、零外发。");
   L.push("  · 算法忠实移植自 f5stegojs（desudesutalk, MIT）；仅匹配该系嵌入。");
   L.push("  · 无隐写/密钥错误时，提取到的是伪随机噪声，长度头会显得离谱——据此判断成败。");
   return L.join("\n");
+}
+
+// ============================================================
+// F5 嵌入（encode 方向）—— 忠实移植 f5stegojs 的 _f5write / f5put。
+// 口径：载体 = 亮度分量 AC 系数（i%64==0 的 DC 位不动）；置换源 = RC4
+// keystream，pm = Fisher-Yates 恒等置换、gamma = 置换后剩余 keystream
+// （与提取侧共享同一 makeShuffler：提取侧置换系数下标、嵌入侧置换恒等
+// 数组，二者数学等价）；先嵌 4 bit 头 (k-1)^gamma[0]；k=1 顺序 LSB，
+// k>=2 走 (1,2^k-1,k) 矩阵编码，找不到码字则收缩（绝对值减 1、符号
+// 不变），收缩到 0 抛弃换下一可用系数；长度头与 f5put 一致（<32768
+// 两字节 LE，否则三字节、第 2 字节最高位作标记）。auto-k 取 f5analyze
+// 容量表中能容纳「头+载荷」的最大 k，嵌入抛错则 k-1 重试（重试前恢复
+// 原始系数副本——与参考仅此一处差异：参考在已污染系数上重试）。
+// 边界：本实现是 f5stegojs 方言，自往返 ≠ 通用 F5（原始 Java F5 口令
+// 协议未核，不宣称兼容）；仅基线/扩展顺序 Huffman（渐进式由
+// reencodeJpeg 优雅报错）；空载荷/超容量/损坏 JPEG 显式报错不静默。
+// ============================================================
+function f5write(coeff, data, k, key) {
+  const coeff_count = coeff.length;
+  let _changed = 0, _embedded = 0, _examined = 0, _thrown = 0;
+
+  const shuffler = makeShuffler(key, coeff_count);
+  const identity = new Uint32Array(coeff_count);
+  for (let x = 0; x < coeff_count; x++) identity[x] = x;
+  const sh = shuffler.shuffle(identity); // 恒等置换 = 参考实现 number 分支
+  const pm = sh.pm, gamma = sh.gamma;
+  let gammaI = 0;
+
+  let next_bit_to_embed = 0, byte_to_embed = 0, data_idx = 0, available_bits_to_embed = 0;
+  const n = (1 << k) - 1;
+
+  // 4 bit 头：(k-1) ^ gamma[0]
+  byte_to_embed = k - 1;
+  byte_to_embed ^= gamma[gammaI++];
+  next_bit_to_embed = byte_to_embed & 1;
+  byte_to_embed >>= 1;
+  available_bits_to_embed = 3;
+
+  let ii;
+  for (ii = 0; ii < coeff_count; ii++) {
+    const shuffled_index = pm[ii];
+    if (shuffled_index % 64 === 0 || coeff[shuffled_index] === 0) continue;
+
+    const cc = coeff[shuffled_index];
+    _examined++;
+
+    if (cc > 0 && (cc & 1) != next_bit_to_embed) {
+      coeff[shuffled_index]--; _changed++;
+    } else if (cc < 0 && (cc & 1) == next_bit_to_embed) {
+      coeff[shuffled_index]++; _changed++;
+    }
+
+    if (coeff[shuffled_index] !== 0) {
+      _embedded++;
+      if (available_bits_to_embed === 0) {
+        if (k != 1 || data_idx >= data.length) break;
+        byte_to_embed = data[data_idx++];
+        byte_to_embed ^= gamma[gammaI++];
+        available_bits_to_embed = 8;
+      }
+      next_bit_to_embed = byte_to_embed & 1;
+      byte_to_embed >>= 1;
+      available_bits_to_embed--;
+    } else {
+      _thrown++;
+    }
+  }
+
+  if (k == 1 && _embedded < data.length * 8) {
+    throw new Error("capacity exceeded " + (_embedded / 8) + " " + data.length);
+  }
+
+  if (k != 1) {
+    let is_last_byte = false, k_bits_to_embed = 0;
+
+    while (!is_last_byte || (available_bits_to_embed !== 0 && is_last_byte)) {
+      k_bits_to_embed = 0;
+
+      for (let i = 0; i < k; i++) {
+        if (available_bits_to_embed === 0) {
+          if (data_idx >= data.length) { is_last_byte = true; break; }
+          byte_to_embed = data[data_idx++];
+          byte_to_embed ^= gamma[gammaI++];
+          available_bits_to_embed = 8;
+        }
+        next_bit_to_embed = byte_to_embed & 1;
+        byte_to_embed >>= 1;
+        available_bits_to_embed--;
+        k_bits_to_embed |= next_bit_to_embed << i;
+      }
+
+      const code_word = [];
+      let ci = null;
+
+      for (let i = 0; i < n; i++) {
+        while (true) {
+          if (++ii >= coeff_count) {
+            throw new Error("capacity exceeded " + (_embedded / 8));
+          }
+          ci = pm[ii];
+          if (ci % 64 !== 0 && coeff[ci] !== 0) break;
+        }
+        code_word.push(ci);
+      }
+      _examined += n;
+
+      while (true) {
+        let vhash = 0, extracted_bit;
+
+        for (let i = 0; i < code_word.length; i++) {
+          if (coeff[code_word[i]] > 0) {
+            extracted_bit = coeff[code_word[i]] & 1;
+          } else {
+            extracted_bit = 1 - (coeff[code_word[i]] & 1);
+          }
+          if (extracted_bit == 1) vhash ^= i + 1;
+        }
+
+        let i = vhash ^ k_bits_to_embed;
+        if (!i) {
+          _embedded += k;
+          break;
+        }
+
+        i--;
+        coeff[code_word[i]] += coeff[code_word[i]] < 0 ? 1 : -1;
+        _changed++;
+
+        if (coeff[code_word[i]] === 0) {
+          _thrown++;
+          code_word.splice(i, 1);
+
+          while (true) {
+            if (++ii >= coeff_count) {
+              throw new Error("capacity exceeded " + (_embedded / 8));
+            }
+            ci = pm[ii];
+            if (ci % 64 !== 0 && coeff[ci] !== 0) break;
+          }
+          _examined++;
+          code_word.push(ci);
+        } else {
+          _embedded += k;
+          break;
+        }
+      }
+    }
+  }
+
+  return {
+    k,
+    embedded: _embedded / 8,
+    examined: _examined,
+    changed: _changed,
+    thrown: _thrown,
+    efficiency: (_embedded / _changed).toFixed(2),
+  };
+}
+
+/** 封装头（与 f5put 一致）：len<32768 → [lo,hi]；否则 [lo,(hi&127)|128,len>>>15]。 */
+function f5PackHeader(payload) {
+  const len = payload.length;
+  if (len < 32768) {
+    const t = new Uint8Array(2 + len);
+    t[0] = len & 255;
+    t[1] = len >>> 8;
+    t.set(payload, 2);
+    return t;
+  }
+  const t = new Uint8Array(3 + len);
+  t[0] = len & 255;
+  t[1] = ((len >>> 8) & 127) + 128;
+  t[2] = len >>> 15;
+  t.set(payload, 3);
+  return t;
+}
+
+/** F5 嵌入主入口：载体 JPEG + 载荷 → 隐写 JPEG。kOpt 显式矩阵参数（0 = 自动）。 */
+function f5embedBytes(jpegBytes, payload, key, kOpt) {
+  if (!payload || payload.length === 0) throw new Error("载荷为空：F5 嵌入至少需要 1 字节");
+  if (payload.length > 8388607) throw new Error("载荷过大（上限 8388607 字节）");
+  if (!key || key.length === 0) throw new Error("key needed");
+
+  const parsed = parseJpeg(jpegBytes);
+  const frame = parsed.frame;
+  let compIdx = 0;
+  for (let i = 0; i < frame.components.length; i++) {
+    if (frame.components[i].componentId === 1) { compIdx = i; break; }
+  }
+  const comp = frame.components[compIdx];
+
+  const t = f5PackHeader(payload);
+
+  let k, stats, mod;
+  if (kOpt && kOpt > 0) {
+    if (kOpt < 1 || kOpt > 16) throw new Error("矩阵参数 k 需在 1-16（与参考容量表同口径）");
+    const mod0 = new Int16Array(comp.blocks.length);
+    mod0.set(comp.blocks);
+    stats = f5write(mod0, t, kOpt, key);
+    k = kOpt;
+    mod = mod0;
+  } else {
+    const prop = f5analyze(comp.blocks);
+    k = 0;
+    for (let i = prop.capacity.length - 1; i >= 0; i--) {
+      if (prop.capacity[i] >= t.length) { k = i; break; }
+    }
+    if (k === 0) throw new Error("capacity exceeded（容量不足以容纳 " + t.length + " 字节封装载荷）");
+    let ok = false;
+    for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+      const modT = new Int16Array(comp.blocks.length);
+      modT.set(comp.blocks); // 每次尝试从原始系数副本开始
+      try { stats = f5write(modT, t, k, key); mod = modT; ok = true; }
+      catch (e) {
+        k--;
+        if (k === 0) throw new Error("capacity exceeded（自动降 k 后仍不足）");
+      }
+    }
+    if (!ok) throw new Error("capacity exceeded");
+    stats.stats = prop;
+  }
+
+  const newComponents = new Array(frame.components.length).fill(null);
+  newComponents[compIdx] = { blocks: mod };
+  const bytes = reencodeJpeg(parsed, newComponents);
+  return { bytes, stats, k, compIdx, width: frame.samplesPerLine, height: frame.scanLines };
+}
+
+/** encode 方向 op 入口：输入 = 载体 JPEG（rawBytes/hex/base64），message = 要嵌入的文本。 */
+function f5stegoEncodeOp(text, p) {
+  const inputEnc = (p && p.inputEnc) || "auto";
+  const keyFormat = (p && p.keyFormat) || "auto";
+  const kOpt = Math.max(0, Math.min(16, parseInt((p && p.k) || "0", 10) || 0));
+
+  const L = [];
+  L.push("=== F5 JPEG 隐写嵌入 ===");
+  L.push("");
+
+  // 载体字节：优先 rawBytes（acceptsBytes 拖入），否则 hex/base64 文本
+  let carrier;
+  if (p && p.rawBytes && p.rawBytes.length) {
+    carrier = p.rawBytes instanceof Uint8Array ? p.rawBytes : new Uint8Array(p.rawBytes);
+  } else {
+    try {
+      carrier = parseInput(text, inputEnc);
+    } catch (e) {
+      L.push("✗ 载体解析失败: " + (e.message || String(e)));
+      L.push("  提示：拖入 JPEG 载体文件，或粘贴其 hex / base64。");
+      return L.join("\n");
+    }
+  }
+  if (!carrier || carrier.length === 0) {
+    L.push("✗ 未取得载体图。请拖入 JPEG 载体（基线/扩展顺序），或粘贴其 hex / base64。");
+    L.push("  要隐藏的文本填参数「隐藏消息」；密钥必填（嵌入/提取两侧须一致）。");
+    return L.join("\n");
+  }
+  if (carrier[0] !== 0xff || carrier[1] !== 0xd8) {
+    L.push("⚠ 未见 JPEG SOI(FF D8) 头——可能非 JPEG，仍尝试解析。");
+  }
+
+  let key;
+  try {
+    key = parseKey(p && p.key, keyFormat);
+  } catch (e) {
+    L.push("✗ 密钥解析失败: " + (e.message || String(e)));
+    return L.join("\n");
+  }
+
+  const msg = p && p.message != null ? String(p.message) : "";
+  if (!msg) {
+    L.push("✗ 隐藏消息为空。F5 嵌入至少需要 1 字节载荷（参数「隐藏消息」填入）。");
+    return L.join("\n");
+  }
+  let payload;
+  try {
+    payload = new TextEncoder().encode(msg);
+  } catch {
+    payload = new Uint8Array(msg.length);
+    for (let i = 0; i < msg.length; i++) payload[i] = msg.charCodeAt(i) & 255;
+  }
+
+  L.push(`● 载体: ${carrier.length} 字节  密钥: ${key.length} 字节（keyFormat=${keyFormat}）`);
+  L.push(`● 消息: ${msg.length} 字符 → UTF-8 ${payload.length} 字节`);
+
+  let out;
+  try {
+    out = f5embedBytes(carrier, payload, key, kOpt);
+  } catch (e) {
+    L.push(`✗ 嵌入失败: ${e.message || String(e)}`);
+    L.push("  常见原因：容量不足（换更大载体图或更短消息）/ k 越界 / 渐进式 JPEG。");
+    return L.join("\n");
+  }
+
+  L.push(`● 矩阵编码参数 k = ${out.k}（(1, ${(1 << out.k) - 1}, ${out.k}) 编码${kOpt ? "，显式指定" : "，自动选择"}）`);
+  L.push(`● 系数改动 ${out.stats.changed} 处（收缩抛弃 ${out.stats.thrown}），嵌入效率 ${out.stats.efficiency} bit/改动`);
+  L.push(`● 产物: ${out.bytes.length} 字节（系数回写重打包，标记段原样保留）`);
+  L.push("");
+  L.push("说明:");
+  L.push("  · 口径 = f5stegojs 方言（desudesutalk, MIT）：本工具嵌入的图可用本工具 decode");
+  L.push("    或原版 f5stegojs 提取互通；原始 Java F5 口令派生不同，不保证互通。");
+  L.push("  · 载图被重新压缩/缩放会破坏载荷——传输用原文件。纯本地计算、零外发。");
+
+  return { text: L.join("\n"), files: [{ name: "f5_stego.jpg", mime: "image/jpeg", bytes: out.bytes }] };
 }
 
 // ============================================================
@@ -957,14 +1263,22 @@ function f5stegoRun(text, p) {
 // ============================================================
 register({
   id: "f5stego",
-  cat: "stego",
-  name: "F5 JPEG 隐写提取",
-  desc: "从 F5(f5stegojs 系) 隐写的 JPEG 中用密钥提取隐藏字节流：熵解码取 DCT 系数 → 密钥置换 → (1,2^k-1,k) 矩阵编码提取 → 输出 hex/ASCII/UTF-8 + F5 容量诊断 + flag 命中。纯前端，仅提取不嵌入",
+  cat: "stegoFile",
+  name: "F5 JPEG 隐写 编/解",
+  desc: "F5(f5stegojs 系) JPEG 隐写双向：encode 用密钥把消息经 (1,2^k-1,k) 矩阵编码+收缩写入亮度 DCT 系数并重打包 JPEG；decode 熵解码取系数 → 密钥置换 → 矩阵解码提取隐藏字节流，输出 hex/ASCII/UTF-8 + F5 容量诊断 + flag 命中。纯前端，零外发",
   acceptsBytes: true,
   params: [
     {
       key: "key", label: "密钥(F5 种子)", type: "text", default: "",
       placeholder: "整数列表如 1,2,3,4,5,6,7 或口令文本",
+    },
+    {
+      key: "message", label: "隐藏消息（encode）", type: "text", default: "",
+      placeholder: "如 flag{...}（按 UTF-8 编码为字节）",
+    },
+    {
+      key: "k", label: "矩阵参数 k（encode，0=自动）", type: "number", default: 0,
+      placeholder: "1-16，留 0 自动选最大可用 k",
     },
     {
       key: "keyFormat", label: "密钥格式", type: "select", default: "auto",
@@ -984,24 +1298,29 @@ register({
       ],
     },
     {
-      key: "outEnc", label: "输出偏好", type: "select", default: "auto",
+      key: "outEnc", label: "输出偏好（decode）", type: "select", default: "auto",
       options: [
         { value: "auto", label: "hex + ASCII + UTF-8" },
         { value: "hex", label: "仅 hex" },
       ],
     },
-    { key: "maxHex", label: "Hex 显示最大字节数", type: "number", default: 512, placeholder: "16-65536" },
+    { key: "maxHex", label: "Hex 显示最大字节数（decode）", type: "number", default: 512, placeholder: "16-65536" },
   ],
-  run: f5stegoRun,
+  encode: f5stegoEncodeOp,
+  decode: f5stegoRun,
 });
 
 export {
   f5stegoRun,
+  f5stegoEncodeOp,
   parseInput,
   parseKey,
   makeShuffler,
   f5analyze,
   f5extract,
+  f5write,
+  f5PackHeader,
+  f5embedBytes,
   parseJpeg,
   pickComponent,
   findFlags,

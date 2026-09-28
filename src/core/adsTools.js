@@ -1,5 +1,5 @@
 /*
- * adsTools.js — NTFS 备用数据流（ADS）纯 JS 工具（2026-09-13 恒烈指示，替代 ntfsstreams GUI exe）。
+ * adsTools.js — NTFS 备用数据流（ADS）纯 JS 工具（2026-09-13 产品裁决，替代 ntfsstreams GUI exe）。
  *
  * 诚实边界（写入 desc/tips）：浏览器只能拿到拖入文件的「主数据流」字节，拿不到 NTFS 主机
  * 文件系统上文件的真实 ADS。但 Windows 右键「压缩为 ZIP」/Info-ZIP 系工具会把 ADS 一起
@@ -21,6 +21,15 @@
  */
 import { register } from "./registry.js";
 import { inflateRaw } from "./pcapDeep.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ---------- 通用 ----------
 function b64ToBytes(b64) {
@@ -280,7 +289,7 @@ function grabDosTime(data, lfhOff) {
 // ---------- 主 op ----------
 register({
   id: "adsTool",
-  cat: "forensic",
+  cat: "filefmt",
   name: "NTFS ADS 备用数据流",
   desc: "检测/提取/删除/添加 ZIP 内嵌的 NTFS 备用数据流（ADS）。Windows 右键压缩会把 ADS 连同 NTFS 扩展字段一起打进 ZIP——「file.txt:secret」类 CTF 题的载体。纯 JS 实现替代原 ntfsstreams GUI exe。注意：浏览器拿不到主机文件系统上文件的真实 ADS，本工具作用于 ZIP 载体。",
   noAuto: true,
@@ -344,7 +353,7 @@ register({
       else if (src.method === 8) bytes = inflateRaw(src.data);
       else throw new Error("不支持的压缩方法 method=" + src.method + "（仅支持 stored/deflate）");
       if (bytes.length !== src.usize) bytes = bytes.slice(0, src.usize);
-      const head = new TextDecoder("utf-8", { fatal: true }).decode(bytes.slice(0, 64)).replace(/[^\x20-\x7e\u4e00-\u9fa5]/g, "·");
+      const head = _decodeUtf8Fatal(bytes.slice(0, 64)).replace(/[^\x20-\x7e\u4e00-\u9fa5]/g, "·");
       const outName = want.replace(/[:\\\/]/g, "_") + ".bin";
       return {
         text: `已提取 ${want}（${bytes.length}B）\n预览（前 64B 文本视图）：${head}${bytes.length > 64 ? "…" : ""}\n完整字节见下载。`,

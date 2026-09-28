@@ -94,7 +94,7 @@ export default {
 
   // ============ 口令爆破 ============
   pbeAesBrute: {
-    what: "PBKDF2 + AES 的口令字典爆破。针对 `openssl enc -aes-256-cbc -pbkdf2` 这类「口令派生密钥」的密文。",
+    what: "PBKDF2 + AES 的弱口令小字典演示，针对 `openssl enc -aes-256-cbc -pbkdf2` 这类「口令派生密钥」的密文。本工具不做大规模爆破——正式爆破请用 John the Ripper / hashcat。",
     principle:
       "PBE(Password-Based Encryption)：用口令经 PBKDF2 派生出 AES 密钥再加密。爆破时逐个试口令字典，每个口令走 PBKDF2 派生 key → AES 解密 → 用 crib（已知明文特征）或高可打印率判断是否命中。",
     usage:
@@ -104,7 +104,7 @@ export default {
     ],
     tips: [
       "openssl 默认 PBKDF2 迭代 10000，salt 在密文 `Salted__` 头后 8 字节。",
-      "内置字典只有常见弱口令，真题可能要导入更大字典。",
+      "内置字典只有常见弱口令，用于快速验证；大字典请用 John the Ripper（https://www.openwall.com/john）或 hashcat 的 PBKDF2 格式（https://hashcat.net）跑。",
     ],
     aka: ["pbe爆破", "pbkdf2 brute", "aes口令爆破", "openssl enc爆破", "password brute", "PBE爆破", "OpenSSL EVP", "PBEWithMD5AndDES", "salted__", "口令密钥爆破", "openssl盐值爆破"],
   },

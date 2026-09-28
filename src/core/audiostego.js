@@ -1,27 +1,27 @@
 /*
- * audiostego.js — 音频隐写识别组（T82，cat:'stego'）。
+ * audiostego.js — 音频隐写（cat:'audio'/'stegoFile'）。
  *
- * 覆盖（全部单向 run 分析类）：
- * wavHeader WAV 头解析（RIFF/fmt/data 块，采样率/位深/声道/时长）
- * 遍历所有 chunk，标注 PCM/浮点/其他格式码。
- * audioLsb 音频 LSB 提取：从 PCM 样本最低有效位（可选每样本 N 位）提取隐藏
- * 比特流 → 文本 / hex。支持 8/16/24/32 位深、按声道选取。
- * dtmfDecode DTMF 从 PCM 提取：Goertzel 算法在标准 8 个 DTMF 频率上检测能量
- * 滑窗判音 → 双音交叉 → 按键序列（0-9 A-D * #）。
- * sstvIdent SSTV 模式识别（仅识别标注，不解调）：检测 1200Hz 同步脉冲 + VIS 码
- * 报告可能的 SSTV 模式，不还原图像。
+ * 覆盖：
+ *  wavHeader WAV 头解析（RIFF/fmt/data 块，采样率/位深/声道/时长）
+ *  audioLsb 音频 LSB 提取：从 PCM 样本低位提取隐藏比特流 → 文本/hex，
+ *           并产出原字节文件产物（bytesToEscapedText 无损形态，通道/位数/上限参数语义不变）
+ *  audioLsbEmbed 音频 LSB 嵌入（出题）：把载荷写进 WAV PCM 样本低位，输出结构合法的 WAV；
+ *           位布局与 audioLsb 提取一一对应：帧序→选中声道序→每样本低 nBits 位→MSB-first；
+ *           封面可为完整 WAV，非 WAV 输入按 rawChannels/rawRate/rawBits 视作原始 PCM 并封装 WAV
+ *  dtmfDecode DTMF 从 PCM 提取；sstvIdent SSTV 模式识别
  *
- * 红线：
- * - 只新建 audiostego.js，不碰任何现有 core/*.js。
- * - 纯前端零外发，全部本地计算。
- * - id 不与现有 stego op 冲突。
- *
- * 契约：register({id, cat:'stego', name, desc, params, run})。
- *
- * 参考：RIFF/WAVE (WAVE PCM)；ITU-T Q.23/Q.24 (DTMF 频率)；
- * Goertzel (1958)；SSTV VIS code (Robot/Scottie/Martin/PD 模式表)。
+ * 不宣称兼容 steghide / SilentEye 协议；本项目格式是自定义的「PCM LSB 位流」。
  */
 import { register } from "./registry.js";
+import { bytesToEscapedText, sniffMagic, decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 const te = (s) => new TextEncoder().encode(s);
 
@@ -82,6 +82,19 @@ function inputToBytes(text, p) {
   return te(text);
 }
 
+/** 载荷文本 → 字节（embed 用；无 rawBytes 通道，编码由 payloadEnc 指定）。 */
+function payloadToBytes(text, enc) {
+  const s = String(text == null ? "" : text).trim();
+  const mode = enc || "auto";
+  if (mode === "hex") { const t = s.replace(/\s+/g, ""); if (!isHex(t)) throw new Error("载荷不是合法 hex（偶数长度 0-9a-f）"); return hexToBytes(t); }
+  if (mode === "base64") { try { return b64ToBytes(s.replace(/\s+/g, "")); } catch { throw new Error("载荷不是合法 base64"); } }
+  if (mode === "utf8") return te(text);
+  const t = s.replace(/\s+/g, "");
+  if (isHex(t)) return hexToBytes(t);
+  if (isB64(t)) { try { return b64ToBytes(t); } catch { /* fall through */ } }
+  return te(text);
+}
+
 // ============================================================
 // 字节读写小工具
 // ============================================================
@@ -90,6 +103,13 @@ function u32le(b, i) { return ((b[i]) | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[
 function i16le(b, i) { const v = u16le(b, i); return v >= 0x8000 ? v - 0x10000 : v; }
 function i24le(b, i) { const v = (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16)) >>> 0; return v >= 0x800000 ? v - 0x1000000 : v; }
 function i32le(b, i) { return (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)); }
+
+/** 把有符号样本按位深小端写回字节缓冲。 */
+function writeSampleLE(b, off, bits, v) {
+  if (bits === 16) { b[off] = v & 0xff; b[off + 1] = (v >> 8) & 0xff; }
+  else if (bits === 24) { b[off] = v & 0xff; b[off + 1] = (v >> 8) & 0xff; b[off + 2] = (v >> 16) & 0xff; }
+  else if (bits === 32) { b[off] = v & 0xff; b[off + 1] = (v >> 8) & 0xff; b[off + 2] = (v >> 16) & 0xff; b[off + 3] = (v >> 24) & 0xff; }
+}
 
 function ascii(b, i, n) {
   let s = "";
@@ -300,7 +320,7 @@ function bitsToBytes(bits) {
 function tryDecodeText(bytes) {
   if (bytes.length === 0) return null;
   try {
-    const s = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const s = _decodeUtf8Fatal(bytes);
     let ctrl = 0;
     for (const ch of s) {
       const c = ch.codePointAt(0);
@@ -309,6 +329,29 @@ function tryDecodeText(bytes) {
     if (s.length > 0 && ctrl / s.length < 0.15) return s;
   } catch { /* 非 UTF-8 */ }
   return null;
+}
+
+/**
+ * 提取产物收口：原字节 + 无损文本形态。
+ *
+ * 为什么 text 用 bytesToEscapedText 而不是「人话报告」：
+ *   配方链中转护栏 transitTextOf 只接受「text 恰为 files 原字节的无损表示」
+ *   （Base64 / Hex / \xNN 转义三者之一），报告是描述、不是内容，会被护栏拒绝。
+ *   转义形态对可打印 ASCII（如 flag{...}）原样输出、对二进制给出 \xNN，既可读又无损。
+ *   （卡面提示的 textMode:"hex" 同属该护栏；此处选项目默认的 escape 形态，等价无损。）
+ * 需要纯 hex 形态时，把 text 改为 bytesToHex(payload) 即可（护栏同样接受）。
+ */
+function lsbProduct(payload, name) {
+  const b = payload instanceof Uint8Array ? payload : new Uint8Array(payload || []);
+  const magic = sniffMagic(b);
+  return {
+    text: bytesToEscapedText(b),
+    files: [{
+      name: (name || "audioLsb") + "." + (magic ? magic.ext : "bin"),
+      mime: magic ? magic.mime : "application/octet-stream",
+      bytes: b,
+    }],
+  };
 }
 
 function audioLsbRun(text, p) {
@@ -329,7 +372,8 @@ function audioLsbRun(text, p) {
     return lines.join("\n");
   }
   const f = w.fmt;
-  if (f.formatTag !== 0x0001 && !(f.formatTag === 0xFFFE && f.subFormat === 0x0001)) {
+  const isPcm = f.formatTag === 0x0001 || (f.formatTag === 0xFFFE && f.subFormat === 0x0001);
+  if (!isPcm) {
     lines.push("");
     lines.push("警告: fmt 格式码非 PCM 整数（tag=0x" + f.formatTag.toString(16) + "），LSB 结果可能无意义");
   }
@@ -385,7 +429,152 @@ function audioLsbRun(text, p) {
     lines.push("");
     lines.push("提示: 非可读 UTF-8。可换声道 / 调 LSB 位数 / 换输入编码重试");
   }
-  return lines.join("\n");
+
+ // 原字节 files 产物：text 走无损形态以满足配方链护栏，files 交回精确字节供下载。
+ //        参数文件名带位深/声道/位数，保留可读上下文（报告行不再进 text）。
+ //        非 PCM（字节结果不可信）仍返回人类报告串、不产出下载，避免把无意义字节当载荷交付。
+  if (!isPcm) {
+    lines.push("");
+    lines.push("--- 提取字节 (hex, 前 " + Math.min(outBytes.length, 4096) + " 字节；非 PCM 仅供参考) ---");
+    lines.push(bytesToHex(outBytes, 4096));
+    return lines.join("\n");
+  }
+  if (outBytes.length === 0) return lines.join("\n");
+  const fname = "audioLsb_" + f.channels + "ch_" + f.bitsPerSample + "bit_lsb" + nBits + "_c" + chSel + "_" + outBytes.length + "B";
+  return lsbProduct(outBytes, fname);
+}
+
+// ============================================================
+// op 2b) audioLsbEmbed — 音频 LSB 嵌入（出题，编码方向）
+// 把载荷位写进 WAV PCM 样本低 nBits 位，位布局与 audioLsb 提取一一对应。
+// ============================================================
+
+/** 由原始 PCM 字节封装合法 WAV（RIFF/WAVE/fmt/data，小端，奇数 data 补 1 字节对齐）。 */
+function buildWav(pcm, channels, sampleRate, bitsPerSample) {
+  const bps = bitsPerSample >> 3;
+  const blockAlign = Math.max(1, channels) * bps;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = pcm.length;
+  const pad = dataSize & 1; // RIFF 块 2 字节对齐
+  const out = new Uint8Array(44 + dataSize + pad);
+  const dv = new DataView(out.buffer);
+  const putAscii = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
+  putAscii(0, "RIFF");
+  dv.setUint32(4, 36 + dataSize + pad, true);
+  putAscii(8, "WAVE");
+  putAscii(12, "fmt ");
+  dv.setUint32(16, 16, true);
+  dv.setUint16(20, 1, true);            // PCM
+  dv.setUint16(22, channels, true);
+  dv.setUint32(24, sampleRate, true);
+  dv.setUint32(28, byteRate, true);
+  dv.setUint16(32, blockAlign, true);
+  dv.setUint16(34, bitsPerSample, true);
+  putAscii(36, "data");
+  dv.setUint32(40, dataSize, true);
+  out.set(pcm, 44);
+  return out;
+}
+
+function audioLsbEmbedRun(text, p) {
+  const pp = p || {};
+  const input = inputToBytes(text, pp);
+  const nBits = Math.max(1, Math.min(8, parseInt(pp.lsbBits, 10) || 1));
+  const chSel = pp.channel || "all";
+
+  // 载荷
+  let payload;
+  try { payload = payloadToBytes(pp.payload, pp.payloadEnc); }
+  catch (e) { return "载荷解析失败：" + (e && e.message ? e.message : String(e)); }
+
+  // 封面：合法 WAV 直接用；否则按 raw 参数视作原始 PCM 并封装 WAV
+  let cover, fmtInfo, isRaw = false;
+  const w = parseWav(input);
+  if (w.ok && w.data) {
+    cover = input;
+    fmtInfo = w.fmt;
+  } else {
+    isRaw = true;
+    const ch = Math.max(1, Math.min(2, parseInt(pp.rawChannels, 10) || 1));
+    const rate = Math.max(1, parseInt(pp.rawRate, 10) || 8000);
+    const bits = [8, 16, 24, 32].includes(parseInt(pp.rawBits, 10)) ? parseInt(pp.rawBits, 10) : 16;
+    const bps = bits >> 3;
+    // 对齐到整帧
+    const usable = input.length - (input.length % (ch * bps));
+    cover = buildWav(input.subarray(0, usable), ch, rate, bits);
+    const w2 = parseWav(cover);
+    fmtInfo = w2.fmt;
+    cover = w2 ? cover : cover;
+  }
+
+  const f = fmtInfo;
+  const pcmFmt = f.formatTag === 0x0001 || (f.formatTag === 0xFFFE && f.subFormat === 0x0001);
+  if (!pcmFmt) return "错误: 封面非 PCM 整数格式（tag=0x" + f.formatTag.toString(16) + "），无法按样本位嵌入";
+  if (![8, 16, 24, 32].includes(f.bitsPerSample)) return "错误: 不支持的位深 " + f.bitsPerSample + " bit（支持 8/16/24/32）";
+
+  const wc = parseWav(cover);
+  if (!wc.ok || !wc.data) return "错误: 封面 WAV 结构不完整（" + (wc.error || "无 data") + "）";
+  const bps = f.bitsPerSample >> 3;
+  const nch = Math.max(1, f.channels);
+  const dataOff = wc.data.offset;
+  const avail = wc.data.actual;
+  const frames = Math.floor(avail / (bps * nch));
+
+  let chList;
+  if (chSel === "all") chList = Array.from({ length: nch }, (_, i) => i);
+  else {
+    const idx = parseInt(chSel, 10);
+    if (isNaN(idx) || idx < 0 || idx >= nch) return "错误: 声道索引 " + chSel + " 越界（共 " + nch + " 声道）";
+    chList = [idx];
+  }
+
+  const capacity = frames * chList.length * nBits;
+  const need = payload.length * 8;
+  if (need > capacity) {
+    return "错误: 载荷过大：需要 " + need + " 位，封面容量 " + capacity +
+      " 位（" + frames + " 帧 × " + chList.length + " 声道 × " + nBits + " 位）。请换更长封面、加声道或降 LSB 位数。";
+  }
+
+  const out = cover.slice();
+  const mask = (1 << nBits) - 1;
+  let bi = 0;
+  const totalBits = need;
+  outer:
+  for (let fr = 0; fr < frames; fr++) {
+    for (const c of chList) {
+      const off = dataOff + (fr * nch + c) * bps;
+      let cur;
+      if (f.bitsPerSample === 8) cur = out[off];
+      else if (f.bitsPerSample === 16) cur = i16le(out, off);
+      else if (f.bitsPerSample === 24) cur = i24le(out, off);
+      else cur = i32le(out, off);
+
+      let pat = 0;
+      for (let k = 0; k < nBits; k++) {
+        const bit = bi < totalBits ? ((payload[bi >> 3] >> (7 - (bi & 7))) & 1) : 0;
+        pat = (pat << 1) | bit;
+        bi++;
+      }
+
+      if (f.bitsPerSample === 8) {
+        // 提取侧读 (raw-128)&mask；nBits<=7 时等价 raw&mask；nBits==8 时按位旋转 0x80 还原
+        const newRaw = nBits === 8 ? (pat ^ 0x80) : ((cur & ~mask) | pat);
+        out[off] = newRaw & 0xff;
+      } else {
+        const nv = (cur & ~mask) | pat;
+        writeSampleLE(out, off, f.bitsPerSample, nv);
+      }
+      if (bi >= totalBits) break outer;
+    }
+  }
+
+  const head = "音频 LSB 嵌入完成：" + (isRaw ? "原始 PCM 封装为 WAV；" : "封面 WAV；") +
+    nch + " 声道 / " + f.bitsPerSample + " bit / " + frames + " 帧，采样率 " + f.sampleRate + " Hz。\n" +
+    "写入参数：每样本低 " + nBits + " 位，声道=" + chSel + "。载荷 " + payload.length + " 字节（" + need + " 位），容量 " + capacity + " 位。\n" +
+    "完整隐写 WAV 请用「文件下载」保存；再用 audioLsb 按相同「每样本 LSB 位数 / 声道」提取即可还原。\n" +
+    "（本格式为本项目自定义 PCM LSB 位流，不宣称兼容 steghide / SilentEye 协议。）";
+  const fname = "stego_audio_" + nch + "ch_" + f.bitsPerSample + "bit_lsb" + nBits + "_c" + chSel + "_" + payload.length + "B.wav";
+  return { text: head, files: [{ name: fname, mime: "audio/wav", bytes: out }] };
 }
 
 // ============================================================
@@ -574,15 +763,15 @@ const INPUT_ENC_PARAM = {
 // 注册（全部 run 单向分析类）
 // ============================================================
 register({
-  id: "wavHeader", cat: "stego", name: "WAV 头解析",
+  id: "wavHeader", cat: "audio", name: "WAV 头解析",
   desc: "解析 RIFF/WAVE 结构：遍历 chunk + fmt 块（采样率/位深/声道/格式码）+ data 块时长；输入 hex/base64/UTF-8 自动识别",
   params: [INPUT_ENC_PARAM],
   run: wavHeaderRun,
   acceptsBytes: true,
 });
 register({
-  id: "audioLsb", cat: "stego", name: "音频 LSB 提取",
-  desc: "从 WAV PCM 样本最低有效位提取隐藏比特流 → 文本/hex；支持 8/16/24/32 位深、按声道选取、每样本多位",
+  id: "audioLsb", cat: "stegoFile", name: "音频 LSB 提取",
+  desc: "从 WAV PCM 样本最低有效位提取隐藏比特流 → 文本/hex + 原字节下载；支持 8/16/24/32 位深、按声道选取、每样本多位",
   params: [
     INPUT_ENC_PARAM,
     { key: "lsbBits", label: "每样本 LSB 位数", type: "number", default: 1, placeholder: "1-8" },
@@ -596,12 +785,41 @@ register({
   run: audioLsbRun,
   acceptsBytes: true,
 });
+// 新增 op audioLsbEmbed 新 op：编码方向（出题）。通道/位数参数语义与 audioLsb 提取一一对应。
 register({
-  id: "sstvIdent", cat: "stego", name: "SSTV 模式识别",
+  id: "audioLsbEmbed", cat: "stegoFile", name: "音频 LSB 嵌入（出题）",
+  desc: "把载荷写进 WAV PCM 样本最低位（或每样本多位）生成隐写 WAV；位布局与 audioLsb 提取一一对应；输入非 WAV 时按原始 PCM 封装",
+  params: [
+    INPUT_ENC_PARAM,
+    { key: "payload", label: "载荷（待嵌入）", type: "text", default: "" },
+    { key: "payloadEnc", label: "载荷编码", type: "select", default: "auto", options: [
+      { value: "auto", label: "自动（hex/base64/UTF-8）" },
+      { value: "hex", label: "Hex（二进制载荷）" },
+      { value: "base64", label: "Base64（二进制载荷）" },
+      { value: "utf8", label: "UTF-8 文本" },
+    ] },
+    { key: "lsbBits", label: "每样本 LSB 位数", type: "number", default: 1, placeholder: "1-8" },
+    { key: "channel", label: "声道", type: "select", default: "all", options: [
+      { value: "all", label: "全部声道" },
+      { value: "0", label: "声道 0" },
+      { value: "1", label: "声道 1" },
+    ] },
+    { key: "rawChannels", label: "原始 PCM 声道数（非 WAV 输入时）", type: "number", default: 1 },
+    { key: "rawRate", label: "原始 PCM 采样率（非 WAV 输入时）", type: "number", default: 8000 },
+    { key: "rawBits", label: "原始 PCM 位深（非 WAV 输入时）", type: "select", default: 16, options: [
+      { value: "8", label: "8 bit" }, { value: "16", label: "16 bit" },
+      { value: "24", label: "24 bit" }, { value: "32", label: "32 bit" },
+    ] },
+  ],
+  run: audioLsbEmbedRun,
+  acceptsBytes: true,
+});
+register({
+  id: "sstvIdent", cat: "audio", name: "SSTV 模式识别",
   desc: "检测 1200Hz 起始同步脉冲 + VIS 码，标注可能的 SSTV 模式（Robot/Scottie/Martin/PD）；仅识别不解调图像",
   params: [INPUT_ENC_PARAM],
   run: sstvIdentRun,
   acceptsBytes: true,
 });
 
-export { parseWav, readPcmSamples, goertzel, inputToBytes };
+export { parseWav, readPcmSamples, goertzel, inputToBytes, payloadToBytes, buildWav, audioLsbRun, audioLsbEmbedRun };

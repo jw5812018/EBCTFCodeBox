@@ -1,5 +1,5 @@
 /*
- * qrdecode.js — QR 真解码组（T77，cat:'stego'）。
+ * qrdecode.js — QR 真解码组（T77，cat:'image'）。
  *
  * 收录：
  * qrDecode QR 码解码（decode）：0/1 矩阵 → 原文（数字/字母/字节模式）
@@ -37,7 +37,7 @@
  * "AS IS", WITHOUT WARRANTY OF ANY KIND.
  * ============================================================
  *
- * 契约：register({id, cat:"stego", name, desc, params, decode?, run?})。
+ * 契约：register({id, cat:"image", name, desc, params, decode?, run?})。
  * decode(matrixText, p) → 原文字符串（输入可为 qrGen 的 JSON 或 ASCII art / 0-1 行矩阵）；
  * run(matrixText, p) → 文本诊断报告。
  */
@@ -47,6 +47,8 @@ import {
   getNumDataCodewords, getNumRawDataModules,
   ECL_NAME, ALPHANUMERIC_CHARSET,
 } from "./qrcode.js";
+// 几何归一化兜底：极性（反色）/ 旋转 / 镜像 / 缺一角。仅在严格定位符检测失败时使用。
+import { decodeGeometryAware } from "./qrgeom.js";
 
 // ============================================================
 // ISO/IEC 18004 事实表（与 qrcode.js 编码侧一致，此处为解码侧独立副本）
@@ -511,12 +513,28 @@ function qrDecodeMatrix(matrix, w, h) {
     }
     throw lastErr || new Error("矩阵非正方形（" + w + "×" + h + "），重采样后仍无法解码");
   }
-  const version = validateQrSize(matrix, w, h);
   const size = w;
+  const version = validateQrSize(matrix, size, size);
   const finders = countFinders(matrix, size, size);
   if (finders < 3) {
+    // 几何归一化兜底：先做极性归一（反色），再按 D4 二面体群八种等距变换
+    // 做方向/镜像归一，最后在只剩 2 个定位符时按已知两点推算第三点。
+    // 仅当严格检测失败才进入；每个几何候选至多触发 1 次解码（有界，可短路）。
+    const geo = decodeGeometryAware(matrix, size, (m, s) => {
+      const f = countFinders(m, s, s);
+      if (f < 3) throw new Error("finder 图案不足（检测到 " + f + " 个，QR 需 3 个）");
+      return decodeMatrixCore(m, s, f, validateQrSize(m, s, s));
+    });
+    if (geo.ok) return geo.result;
     throw new Error("finder 图案不足（检测到 " + finders + " 个，QR 需 3 个）");
   }
+  return decodeMatrixCore(matrix, size, finders, version);
+}
+
+// ============================================================
+// 几何归一后的实际解码体：格式信息 → 码字 → RS 纠错 → 数据段
+// ============================================================
+function decodeMatrixCore(matrix, size, finders, version) {
   const fi = readFormatInfo(matrix, size);
   if (fi.ecl < 0 || fi.ecl > 3) throw new Error("无法识别格式信息（ECL/掩码）");
   const ecl = fi.ecl;
@@ -629,7 +647,7 @@ function qrDecodeDispatch(text, p) {
 
 register({
   id: "qrDecode", family: "qr", familyLabel: "decode",
-  cat: "stego",
+  cat: "image",
   name: "QR 码解码",
   desc: "从 0/1 矩阵反解 QR 内容：finder 检测 + 格式信息 + 之字形取数 + 掩码还原 + RS 纠错 + 数字/字母/字节模式还原。开「诊断」输出版本/ECL/掩码/RS纠错数/分段模式全流程报告",
   params: [

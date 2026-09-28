@@ -352,6 +352,15 @@ label.switch,
    盒子居中救不了字形——按量得偏移反向平移 1.6/2.5px。 */
 .act-btn.fav-btn .msym svg { transform: translate(1.6px, -2.5px); }
 .fav-btn:not(.on) { opacity: .55; }
+/* 重运算运行卡（重 op 独立线程执行时的读秒 + 取消）：跟随项目令牌，不做假进度条。 */
+.op-run-busy {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2);
+  background: var(--field-bg); color: var(--on-surface);
+  border: 1px solid var(--outline); border-radius: var(--r-sm);
+  font-size: var(--fs-base);
+}
+.op-run-busy .act-btn { margin-inline-start: auto; }
 .fav-btn.on { background: var(--primary-container); color: var(--on-primary-container); }
 .fav-btn.on .msym { color: inherit; }
 .fav-empty { padding: var(--sp-3); color: var(--on-surface-var); font-size: var(--fs-base); line-height: 1.5; }
@@ -668,6 +677,35 @@ label.switch,
 .onekey-brute-param { font-size: var(--fs-sm); color: var(--primary); font-weight: 600; }
 .onekey-brute-branch .ok-val { font-family: var(--io-font); font-feature-settings: var(--font-features); margin-top: var(--sp-1); line-height: 1.55; word-break: break-all; }
 
+/* 爆破分组卡标题条：卡片本体 padding:0，而该卡的 <summary> 只挂 .ok-name（无盒规则）+ 浏览器默认
+   list-item 标记，标题因此被压成紧贴边框的细条（实测：标题条内边距 0、容器高即行高，而分支行有内边距）。
+   这里按穷举合并卡同一套口径把标题条撑开：全宽 + 内边距 + 最小高度 + 可换行；折叠指示改用 CSS 几何三角
+   （display:flex 后浏览器原生 ::marker 不再渲染），并沿用原先「展开▾ / 收起▶」的朝向语义。 */
+.onekey-card.onekey-brute > summary.ok-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
+  min-height: 52px;
+  padding: var(--sp-3) var(--sp-4);
+  box-sizing: border-box;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+.onekey-card.onekey-brute > summary.ok-name::-webkit-details-marker { display: none; }
+.onekey-card.onekey-brute > summary.ok-name::before {
+  content: "";
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--on-surface-var);
+  transform: rotate(-90deg);
+  transition: transform var(--dur-short) var(--ease);
+}
+.onekey-card.onekey-brute[open] > summary.ok-name::before { transform: rotate(0deg); }
+
 /* 「三元组摘要行」——置顶最优解摘要卡，视觉与普通候选卡区分 */
 .onekey-card.onekey-summary { border-inline-start-color: var(--primary); background: var(--surface-hi); }
 .onekey-summary-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; background: var(--primary); color: var(--on-primary, #fff); font-size: var(--fs-xs); font-weight: 600; margin-inline-end: var(--sp-2); }
@@ -703,6 +741,29 @@ label.switch,
 
 /* 瞬移修复：.toast 靠 translateX(-50%) 居中，动画帧必须全程带上，否则结束瞬间 transform 被 translateY 覆盖 → X 居中丢失右移半身位 */
 @keyframes fadeUp { from { opacity: 0; transform: translateX(-50%) translateY(8px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+/* T621-D 温和版：新版本就绪提示条（可点击刷新，不自动 reload） */
+.pwa-update-bar {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--sp-3);
+  background: var(--surface-hi); color: var(--on-surface);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm);
+  box-shadow: var(--el-3); font-size: var(--fs-sm); z-index: 100;
+  animation: fadeUp var(--dur-short) var(--ease);
+  max-width: calc(100vw - 32px);
+}
+.pwa-update-bar .pwa-update-btn {
+  border: none; cursor: pointer; white-space: nowrap;
+  background: var(--grad-primary, var(--primary)); color: var(--on-primary);
+  padding: 6px 14px; border-radius: 999px; font-size: var(--fs-sm); font-weight: 600;
+}
+.pwa-update-bar .pwa-update-close {
+  border: none; cursor: pointer; background: transparent;
+  color: var(--on-surface-var); font-size: 16px; line-height: 1;
+  padding: 4px 6px; border-radius: 50%;
+}
+.pwa-update-bar .pwa-update-btn, .pwa-update-bar .pwa-update-close { min-height: 44px; }
+
 
 /* 文件拖放区 + 报告卡片 */
 .file-dropzone {
@@ -814,8 +875,9 @@ label.switch,
   cursor: zoom-out;
   animation: img-lightbox-fade var(--dur-medium) var(--ease-out);
 }
-.img-lightbox.img-lightbox-closing { animation: img-lightbox-fade var(--dur-4) var(--ease-in) reverse; }
+.img-lightbox.img-lightbox-closing { animation: img-lightbox-fade-out var(--dur-4) var(--ease-in) forwards; }
 @keyframes img-lightbox-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes img-lightbox-fade-out { from { opacity: 1; } to { opacity: 0; } }
 .img-lightbox-img {
   max-width: min(92vw, 1100px);
   max-height: 90vh;
@@ -832,7 +894,7 @@ label.switch,
 .img-lightbox-close {
   position: fixed;
   top: var(--sp-4); right: var(--sp-4);
-  width: 44px; height: 44px;
+  width: 36px; height: 36px;
   border-radius: var(--r-full);
   display: inline-flex; align-items: center; justify-content: center;
   color: #fff;
@@ -842,10 +904,6 @@ label.switch,
   transition: background var(--dur-short) var(--ease), transform var(--dur-short) var(--ease);
 }
 .img-lightbox-close:hover { background: rgba(0, 0, 0, .65); }
-.img-lightbox-close:active { transform: scale(.92); }
-@media (prefers-reduced-motion: reduce) {
-  .img-lightbox, .img-lightbox-img, .img-lightbox.img-lightbox-closing { animation: none; }
-}
 
 /* Octocat 图标 + 结果卡 hover + 错误态 + 展开按钮 */
 .octocat { fill: currentColor; display: inline-block; vertical-align: middle; }
@@ -1774,7 +1832,7 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
 }
 
 /* ============ T365 窄屏适配（<860px 与全站断点对齐）：工作区收窄 / 参数竖排 / 双栏→单栏 ============ */
-/* 放文件尾部：本块改写的选择器（.about-*/.file-*/.edu-*/.magic-*/.onekey-brute-*/.crypto-*）基类
+/* 放文件尾部：本块改写的选择器（.about-*、.file-*、.edu-*、.magic-*、.onekey-brute-*、.crypto-*）基类
  * 都在本文件前部定义，置于尾部才能保证同特异性下覆盖基类（CSS 级联后者胜）。 */
 @media (max-width: 860px) {
   .workspace { padding: var(--sp-4); }
@@ -1844,7 +1902,10 @@ html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after 
   /* IO 面板头 32px 固定高放不下 44px 按钮：改为自适应行高 */
   .io-pane-head { height: auto; min-height: 44px; }
   /* IO 工具栏小按钮 30→44（44 亦合 M3 触控目标下限） */
-  .tool-btn, .et-btn, .ds-close, .env-refresh-btn { width: 44px; height: 44px; }
+  .tool-btn, .et-btn, .ds-close, .img-lightbox-close, .env-refresh-btn { width: 44px; height: 44px; }
+  /* 通用弹层右上关闭钮：.exp-* 运行时注入、图鉴/解码强度样式表在本表之后加载，
+     同特异性下后者胜，故用 html 提高特异性。粗指针补到 44px，桌面仍保持 36px。 */
+  html .exp-close, html .ci-modal-close, html .ds-close { width: 44px; height: 44px; }
   /* 配方链迷你按钮 28→44 */
   .recipe-mini-btn { width: 44px; height: 44px; }
   /* 环境面板小按钮补高 */
@@ -1906,6 +1967,12 @@ html.spring-motion .fam-seg { position: relative; }
 html.spring-motion .fam-seg .seg-thumb { position: absolute; top: 3px; bottom: 3px; left: 0; background: var(--primary); border-radius: var(--r-full); z-index: 0; will-change: transform; }
 html.spring-motion .fam-seg button { position: relative; z-index: 1; }
 html.spring-motion .fam-seg button.on { background: transparent; color: var(--on-primary); }
+/* 方向切换（编码/解码）滑块指示器：与族滑块同款滑轨+滑块，样式令牌逐字复用；
+   spring-motion 关闭时不渲染指示器（JS 侧守卫），本组规则随之不生效，回退 .on 背景。 */
+html.spring-motion #dirSeg { position: relative; }
+html.spring-motion #dirSeg .seg-thumb { position: absolute; top: 3px; bottom: 3px; left: 0; background: var(--primary); border-radius: var(--r-full); z-index: 0; will-change: transform; }
+html.spring-motion #dirSeg button { position: relative; z-index: 1; }
+html.spring-motion #dirSeg button.on { background: transparent; color: var(--on-primary); }
 
 /* ── T510 第二批（恒烈 2026-09-13 四反馈）：thumb 微弹参数与滚动保持纯 JS；本段收拉弹化+切页+涟漪 ── */
 /* ④ 收拉菜单弹化：入场位移/透明度改由 main.js toggleCat 弹簧驱动（velocity carry 打断续接），
@@ -1914,3 +1981,10 @@ html.spring-motion .nav-sub.animate-in { animation: none; }
 /* ③ 切页过渡：容器纯淡入 150ms（恒烈定稿：从无到有、平滑、快、无弹动），走合成器属性 */
 html.spring-motion .workspace { will-change: transform, opacity; }
 /* ④ 涟漪已停用（恒烈 2026-09-13 裁决取消）——安卓14 扩散环规则随之移除 */
+
+/* 图片参数：选择图片按钮（图标+文字）与拖拽悬停高亮 */
+.param input.dragover {
+  outline: 2px dashed var(--primary);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-1));
+}

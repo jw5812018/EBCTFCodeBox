@@ -1,7 +1,7 @@
 /*
  * edu-t508-b2.js — T508 批二·编码映射 7 op 科普卡（encodingExt3.js）。
  * crockford32 / alienAlphabet / futhark / countingRods / chuckUnary / wingdings / cardanGrille
- * 示例输出全部来自实跑（资料/工程留存/T508/批2_编码映射/test.mjs 同口径），无编造。
+ * 示例输出全部来自实跑（独立脚本同口径核验），无编造。
  */
 export default {
   crockford32: {

@@ -5,23 +5,23 @@
  * 件内自注册：无（纯数据 + 工具函数，无加载副作用）。
  *
  * 导出：
- * PRESETS — 预设配方数组，每项 {id, name, desc, graph}
+ * PRESETS — 预设配方数组，每项 {id, name, desc, graph, [file]}（file:true = 链头吃文件字节）
  * executeRecipeAsync — 异步版执行器（支持 gzipCodec 等异步 op）
  * executeRecipe — 同步版执行器（re-export 自 recipe.js，仅同步 op）
  * validateRecipe — 校验（re-export 自 recipe.js）
  * topoSort — 拓扑排序（re-export 自 recipe.js）
  */
-import { topoSort, executeRecipe, validateRecipe } from "./recipe.js";
+import { topoSort, executeRecipe, validateRecipe, resolveRecipeHead, resolveTransitInput } from "./recipe.js";
 import { getOp } from "./registry.js";
 import { transitTextOf } from "./productResult.js";
 export { recipeDisplayText, recipeTerminalText, productFileEntries as recipeFileEntries } from "./productResult.js";
 
 // ---- 异步执行器（支持 async op）----
 
-async function runNodeAsync(node, inputText) {
+async function runNodeAsync(node, inputText, params) {
   const op = getOp(node.opId);
   if (!op) throw new Error(`unknown opId: ${node.opId}`);
-  const params = node.params || {};
+  params = params || node.params || {};
   const mode = params.mode;
   let result;
   if (mode === "decode") {
@@ -33,9 +33,9 @@ async function runNodeAsync(node, inputText) {
       throw new Error(`op ${node.opId} has no encode`);
     result = op.encode(inputText, params);
   } else if (mode === "run") {
-    if (typeof op.run !== "function")
-      throw new Error(`op ${node.opId} has no run`);
-    result = op.run(inputText, params);
+    if (typeof op.run === "function") result = op.run(inputText, params);
+    else if (typeof op.decode === "function") result = op.decode(inputText, params); // 兼容：原 run 型 op 改双向后，旧配方 run 节点回落 decode（语义同提取）
+    else throw new Error(`op ${node.opId} has no run`);
   } else {
     if (typeof op.encode === "function") result = op.encode(inputText, params);
     else if (typeof op.run === "function") result = op.run(inputText, params);
@@ -48,7 +48,8 @@ async function runNodeAsync(node, inputText) {
  * 异步版 executeRecipe。与 recipe.js 的 executeRecipe 逻辑一致
  * 但用 await 调用节点执行函数，支持 async op（gzipCodec/zlibCodec 等）。
  * @param {{nodes:Array,edges:Array}} graph
- * @param {string} input
+ * @param {string|Uint8Array|Array|{text?:string,bytes?:Uint8Array}} input
+ *        链头输入：文本、真字节，或 {text, bytes}（文件通道，见 resolveRecipeHead）
  */
 export async function executeRecipeAsync(graph, input) {
   const order = topoSort(graph);
@@ -68,16 +69,17 @@ export async function executeRecipeAsync(graph, input) {
   for (const id of order) {
     const node = nodeMap.get(id);
     const incoming = inEdges.get(id) || [];
-    let inputText;
+    let inputText, params;
     if (incoming.length === 0) {
-      inputText = input == null ? "" : String(input);
+      const head = resolveRecipeHead(node, input);
+      inputText = head.text;
+      params = head.params;
     } else {
-      const join = (node.params && node.params.join) || "";
-      inputText = incoming
-        .map((e) => (outputs.has(e.from) ? transitTextOf(outputs.get(e.from)) : ""))
-        .join(join);
+      const t = resolveTransitInput(node, outputs, incoming);
+      inputText = t.text;
+      if (t.params) params = t.params;
     }
-    outputs.set(id, await runNodeAsync(node, inputText));
+    outputs.set(id, await runNodeAsync(node, inputText, params));
   }
 
   const finals = graph.nodes
@@ -225,6 +227,49 @@ export const PRESETS = [
         { id: "n1", opId: "zlibCodec", params: { mode: "decode", inputEnc: "base64" } },
       ],
       edges: [],
+    },
+  },
+ // ---- 链头文件通道卡片（T84 扩展：链头吃真字节，见 resolveRecipeHead）----
+ // 这三张卡此前做不出来，是因为配方链头只吃 inputText，而这三个 op 都声明 acceptsBytes
+ // （要 p.rawBytes 真字节）。补上链头通道后，直接把文件拖到配方输入框即可一把梭。
+  {
+    id: "morse-audio-to-base32",
+    name: "摩斯音频 → Base32 解码",
+    desc: "拖入摩斯音频 WAV：包络 + Otsu 自适应解出点划 → 摩斯明文 → Base32 解码（链头走文件通道，diag 关掉以免诊断文本污染下一步）",
+    async: false,
+    file: true,
+    graph: {
+      nodes: [
+        { id: "n1", opId: "morseWav", params: { mode: "decode", diag: false } },
+        { id: "n2", opId: "base32", params: { mode: "decode" } },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
+    },
+  },
+  {
+    id: "dtmf-wav-to-keys",
+    name: "DTMF 拨号音 → 按键序列",
+    desc: "拖入 DTMF 拨号音 WAV：20 ms 窗 Goertzel 检 8 基频 → 按键序列（五道闸去底噪伪键），如 12535",
+    async: false,
+    file: true,
+    graph: {
+      nodes: [
+        { id: "n1", opId: "dtmfWav", params: { mode: "decode" } },
+      ],
+      edges: [],
+    },
+  },
+  {
+    id: "bitstream-to-qr",
+    name: "0/1 位流 → 二维码（自动推边长）",
+    desc: "一串 0/1 位流按近似正方形铺成点阵图（边长自动 = √位数，如 625 位 → 25×25）再读码，省掉人工数边长那一步",
+    async: true,
+    graph: {
+      nodes: [
+        { id: "n1", opId: "bin2img", params: { mode: "run", width: 0, scale: 4 } },
+        { id: "n2", opId: "qrScanImage", params: { mode: "run" } },
+      ],
+      edges: [{ from: "n1", to: "n2" }],
     },
   },
 ];

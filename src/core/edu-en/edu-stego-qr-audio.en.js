@@ -73,6 +73,24 @@ export default {
     aka: ["wav头", "wav header", "riff解析", "wave结构", "wav头解析", "wav文件头", "riff wave", "音频头解析", "wav format chunk", "pcm头解析", "wave file header"],
   },
 
+  audioLsbEmbed: {
+    what: "Audio LSB embedding (for authoring challenges): writes a payload into the lowest bits of each PCM sample of a WAV, producing a stego WAV that sounds identical - for creating your own audio stego challenges.",
+    principle:
+      "PCM samples are integers (8/16/24/32-bit). Changing the lowest bits of a sample changes the volume imperceptibly while carrying 1 bit per sample (N bits with the N-lowest-bits mode). The write order mirrors audioLsb extraction exactly: frame order -> selected channels -> N lowest bits per sample, MSB first; the same bit-depth/channel settings recover the payload verbatim. Capacity = frames x selected channels x bits per sample.",
+    usage: "Drop a cover WAV (or raw PCM bytes), enter the payload (text or hex/base64 binary), choose bits per sample and channels, download the stego WAV; extract with audioLsb using the same parameters.",
+    examples: [
+      { in: "cover WAV + payload flag{...}", param: "16-bit / all channels / 1 bit per sample", out: "stego WAV (file download)" },
+    ],
+    tips: [
+      "The bit layout mirrors audioLsb exactly; bit-depth and channels must match on both sides or you get garbage.",
+      "Insufficient capacity fails explicitly with the required size. This format is this project's own PCM LSB bitstream and is not compatible with steghide / SilentEye protocols.",
+    ],
+    aka: [
+      "audio lsb embed", "wav lsb embed", "audio stego embed", "wav stego embed",
+      "least significant bit audio", "pcm lsb embed", "audioLSB embed",
+      "audio watermark embed", "lsb challenge authoring", "sound stego embed",
+    ],
+  },
   audioLsb: {
     what: "Audio LSB extraction: same idea as image LSB — the secret is hidden in the lowest bit of each PCM sample value of a WAV, dug out sample by sample and assembled into a hidden bit stream.",
     principle:

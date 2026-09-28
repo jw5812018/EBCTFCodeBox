@@ -1,5 +1,5 @@
 /*
- * john_office.js — Office 加密文件 → John/hashcat hash 串提取（T291，cat:'forensic'，单向 run）。
+ * john_office.js — Office 加密文件 → John/hashcat hash 串提取（T291，cat:'crack'，单向 run）。
  *
  * 用途：CTF 取证里拿到加密 Office 文档（.doc/.docx/.xls/.xlsx/.ppt/.pptx）
  * 想用 John the Ripper / hashcat 离线爆破密码。本 op 只提取 hash 串（不爆破）
@@ -785,7 +785,7 @@ function office2johnRun(text, p = {}) {
 // ============================================================
 register({
   id: "office2john",
-  cat: "forensic",
+  cat: "crack",
   name: "Office 哈希提取（office2john）",
   desc: "从加密 Office 文档（.doc/.docx/.xls/.xlsx/.ppt/.pptx）提取 John/hashcat 格式 hash 串（只提取不爆破）。解析 CFB/OLE2 容器中的 EncryptionInfo 流，支持 Office 2007($office$*2007*, hashcat 9400)、2010($office$*2010*, hashcat 9500)、2013($office$*2013*, hashcat 9600)",
   params: [
@@ -804,6 +804,7 @@ export {
   office2johnRun, extractOfficeHash, parseEncryptionInfo,
   parseEncryptionInfo2007, parseEncryptionInfoAgile,
   parseCfbHeader, isCfbMagic, readFat, readDirectory, readStream,
+  followChain, parseDirEntry, readMiniFat, readMiniStream,
   findEncryptionInfoStream, scanRawBytes,
   inputToBytes, u16le, u32le, toHex, b64decode,
   CFB_MAGIC, ENDOFCHAIN,

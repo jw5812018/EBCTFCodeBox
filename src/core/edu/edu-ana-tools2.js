@@ -64,7 +64,7 @@ export default {
   },
 
   hashDictCrack: {
-    what: "用字典爆破 MD5/SHA-1/SHA-256/NTLM 哈希——拿弱口令字典、纯数字、日期组合逐一算哈希比对，命中即得明文。",
+    what: "用弱口令小字典演示 MD5/SHA-1/SHA-256/NTLM 的字典攻击原理，命中即得明文。本工具不做大规模爆破——正式爆破请用 hashcat / John the Ripper。",
     principle: "字典爆破的核心：预生成候选明文列表（弱口令 top 300 / $0 \\sim 10^{N}$ 数字 / 1970-2030 日期），对每个候选算指定算法的哈希，与目标比对。MD5/NTLM 走纯 JS 同步快速路径；SHA-1/SHA-256 走 WebCrypto 异步。auto 模式按长度自动猜算法（32位→MD5，40位→SHA-1，64位→SHA-256）。SHA 系超 200 万次自动中断防爆。",
     usage: "输入目标哈希，选算法（auto 自动按长度猜）、字典来源（top弱口令/纯数字/日期/全部）、数字最大位数。输出命中状态+明文+尝试次数。",
     examples: [
@@ -73,7 +73,7 @@ export default {
     tips: [
       "auto 模式下 32 位优先试 MD5——如果实际是 NTLM 需手动指定。",
       "numeric 位数越大越慢：6 位 = 100 万次秒级，8 位 = 1 亿次需走 workerPool 并行。",
-      "top 弱口令字典约 300 条，覆盖 password/123456/admin 等常见弱口令，CTF 够用。",
+      "内置字典约 300 条，只覆盖最高频弱口令，用于快速验证；rockyou 级大字典请导出 hash 后用 hashcat（https://hashcat.net）或 John the Ripper（https://www.openwall.com/john）跑，在线反查可用 CrackStation（https://crackstation.net）。",
     ],
     aka: ["哈希爆破", "hash crack", "dictionary attack", "hash dictionary", "字典爆破", "哈希字典爆破", "md5解密", "哈希破解", "hash dict crack", "弱口令爆破", "hash brute", "撞库解哈希"],
   },

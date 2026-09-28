@@ -195,8 +195,8 @@ async function pbeAesBrute(cipherInput, p) {
   return lines.join("\n");
 }
 register({
-  id: "pbeAesBrute", cat: "crypto", name: "PBE-AES 口令爆破",
-  desc: "PBKDF2+AES 口令字典爆破。input=密文(hex/base64)，用口令字典逐个 PBKDF2 派生 key 解 AES，crib 命中或高可打印率即报。覆盖 openssl enc -aes-256-cbc -pbkdf2。",
+  id: "pbeAesBrute", cat: "crypto", name: "PBE-AES 口令爆破（小字典演示）",
+  desc: "PBKDF2+AES 弱口令小字典演示：input=密文(hex/base64)，逐口令 PBKDF2 派生 key 解 AES，crib 命中或高可打印率即报，覆盖 openssl enc -pbkdf2 密文。本工具不做大规模爆破——正式爆破请把密文喂给 John the Ripper / hashcat 的 PBKDF2 格式（https://www.openwall.com/john、https://hashcat.net）",
   params: [
     { key: "cipherFormat", label: "密文格式", type: "select", default: "hex", options: [
       { value: "hex", label: "十六进制" }, { value: "base64", label: "Base64" },

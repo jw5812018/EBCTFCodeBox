@@ -1,5 +1,5 @@
 /*
- * music.js — 音乐 / 乐谱编码组（T73，cat:'fancy'）。
+ * music.js — 音乐 / 乐谱编码组（T73，cat:'audio'）。
  *
  * 覆盖：
  * - 音名（Scientific Pitch Notation）：C4, C#4, Db4, B3, ...

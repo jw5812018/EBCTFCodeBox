@@ -1,5 +1,5 @@
 /*
- * core/magic/magicWorker.js — 一键解码真多线程 Worker（恒烈需求：真多线程看门狗）
+ * core/magic/magicWorker.js — 一键解码真多线程 Worker（产品裁决：真多线程看门狗）
  *
  * 模块 Worker（type:"module"）：导入完整算法注册表 registerAll + magicDecode，
  * 在**独立线程**跑智能解码，主线程完全不阻塞——倒计时流畅、UI 不冻、可随时硬杀接管。

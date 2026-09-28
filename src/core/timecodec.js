@@ -51,9 +51,12 @@ function unixDetectUnit(n) {
 }
 
 function unixToMs(ts, unit) {
-  const u = unit === "auto" ? unixDetectUnit(Number(ts)) : unit;
-  const n = Number(ts);
+  // 修复（T558）：空/纯空白原被 Number("")===0 静默当成 Unix 纪元 0。
+  const raw = String(ts).trim();
+  if (!raw) throw new Error("时间戳: 空输入");
+  const n = Number(raw);
   if (!Number.isFinite(n)) throw new Error("时间戳非有效数字: " + ts);
+  const u = unit === "auto" ? unixDetectUnit(n) : unit;
   if (u === "sec") return n * 1000;
   if (u === "ms") return n;
   if (u === "us") return n / 1000;
@@ -74,14 +77,24 @@ function msToUnix(ms, unit) {
 const FILETIME_EPOCH_OFFSET_MS = 11644473600000n;
 
 function filetimeToMs(ft) {
-  const n = BigInt(String(ft).trim());
+  // 修复（T558）：BigInt("")===0n，空串原被静默当成 FILETIME 0（1601 纪元）；
+  // 且负数经 /10000n 向零截断后静默落到 1601。FILETIME 为 64 位无符号（MS-DTYP 2.3.3）。
+  const raw = String(ft).trim();
+  if (!raw) throw new Error("FILETIME: 空输入");
+  let n;
+  try { n = BigInt(raw); } catch { throw new Error("FILETIME: 非法整数: " + ft); }
+  if (n < 0n) throw new Error("FILETIME: 不能为负（64 位无符号）: " + ft);
+  if (n > 18446744073709551615n) throw new Error("FILETIME: 超出 64 位无符号上限: " + ft);
   const ms = n / 10000n - FILETIME_EPOCH_OFFSET_MS;
   return Number(ms);
 }
 
 function msToFiletime(ms) {
   const n = BigInt(Math.floor(ms));
-  return ((n + FILETIME_EPOCH_OFFSET_MS) * 10000n).toString();
+  const v = (n + FILETIME_EPOCH_OFFSET_MS) * 10000n;
+  if (v < 0n) throw new Error("FILETIME: 早于 1601-01-01 纪元: " + ms);
+  if (v > 18446744073709551615n) throw new Error("FILETIME: 超出 64 位无符号上限: " + ms);
+  return v.toString();
 }
 
 // ============ 3. Mac HFS+ ↔ ISO8601 ============
@@ -89,11 +102,22 @@ function msToFiletime(ms) {
 const HFS_EPOCH_OFFSET_SEC = 2082844800;
 
 function hfsToMs(sec) {
-  return (Number(sec) - HFS_EPOCH_OFFSET_SEC) * 1000;
+  // 修复（T558）：Number("")===0，空串原被静默当成 HFS+ 0（1904 纪元）；
+  // HFS+ 为 32 位无符号（TN1150：UInt32 秒，自 1904-01-01 GMT，上限 2040-02-06）。
+  const raw = String(sec).trim();
+  if (!raw) throw new Error("HFS+ 时间: 空输入");
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error("HFS+ 时间非有效数字: " + sec);
+  if (n < 0) throw new Error("HFS+ 时间不能为负（32 位无符号）: " + sec);
+  if (n > 4294967295) throw new Error("HFS+ 时间超出 32 位无符号上限（2040-02-06）: " + sec);
+  return (n - HFS_EPOCH_OFFSET_SEC) * 1000;
 }
 
 function msToHfs(ms) {
-  return Math.floor(ms / 1000) + HFS_EPOCH_OFFSET_SEC;
+  const v = Math.floor(ms / 1000) + HFS_EPOCH_OFFSET_SEC;
+  if (v < 0) throw new Error("HFS+ 时间早于 1904-01-01 纪元: " + ms);
+  if (v > 4294967295) throw new Error("HFS+ 时间超出 32 位无符号上限（2040-02-06）: " + ms);
+  return v;
 }
 
 // ============ 4. Cocoa ↔ ISO8601 ============
@@ -101,7 +125,13 @@ function msToHfs(ms) {
 const COCOA_EPOCH_OFFSET_SEC = 978307200;
 
 function cocoaToMs(sec) {
-  return (Number(sec) + COCOA_EPOCH_OFFSET_SEC) * 1000;
+  // 修复（T558）：Number("")===0，空串原被静默当成 Cocoa 0（2001 纪元）。
+  // Cocoa/NSDate 为有符号，契约内负值合法（NSDate：早于 2001-01-01 为负）。
+  const raw = String(sec).trim();
+  if (!raw) throw new Error("Cocoa 时间: 空输入");
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error("Cocoa 时间非有效数字: " + sec);
+  return (n + COCOA_EPOCH_OFFSET_SEC) * 1000;
 }
 
 function msToCocoa(ms) {
@@ -269,7 +299,7 @@ function tzConvert(iso, fromTz, toTz) {
 // ============ 注册 ============
 register({
   id: "unixTime", cat: "radix", name: "Unix 时间戳 ↔ ISO8601",
-  desc: "Unix 时间戳（秒/毫秒/微秒 auto）↔ ISO8601（UTC）",
+  desc: "Unix 时间戳（秒/毫秒/微秒 auto，有符号，允许契约内负值）↔ ISO8601（UTC）",
   params: [
     { key: "unit", label: "单位", type: "select", default: "auto", options: [
       { value: "auto", label: "自动（按数值大小）" },
@@ -284,7 +314,7 @@ register({
 
 register({
   id: "filetime", cat: "radix", name: "Windows FILETIME ↔ ISO8601",
-  desc: "FILETIME（1601 纪元 100ns，64 位 BigInt）↔ ISO8601",
+  desc: "FILETIME（1601 纪元 100ns，64 位无符号）↔ ISO8601；拒绝负值、越界、早于 1601",
   params: [],
   encode: (t) => msToFiletime(parseIso(t)),
   decode: (t) => formatIso(filetimeToMs(t)),
@@ -292,7 +322,7 @@ register({
 
 register({
   id: "hfsTime", cat: "radix", name: "Mac HFS+ 时间 ↔ ISO8601",
-  desc: "HFS+（1904 纪元 秒）↔ ISO8601",
+  desc: "HFS+（1904 纪元 秒，32 位无符号，上限 2040-02-06）↔ ISO8601；拒绝负值、越界、早于 1904",
   params: [],
   encode: (t) => msToHfs(parseIso(t)).toString(),
   decode: (t) => formatIso(hfsToMs(t)),
@@ -300,7 +330,7 @@ register({
 
 register({
   id: "cocoaTime", cat: "radix", name: "Cocoa 时间 ↔ ISO8601",
-  desc: "Cocoa（2001 纪元 秒）↔ ISO8601",
+  desc: "Cocoa（2001 纪元 秒，有符号，允许契约内负值）↔ ISO8601",
   params: [],
   encode: (t) => msToCocoa(parseIso(t)).toString(),
   decode: (t) => formatIso(cocoaToMs(t)),

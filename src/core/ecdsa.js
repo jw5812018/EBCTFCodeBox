@@ -489,7 +489,7 @@ function ecdsaKeyGenRun(_text, p = {}) {
   L.push(`主格式（pubFormat=${mainFmt}）: ${mainFmt === "compressed" ? fmtCompressed(Q, c) : fmtUncompressed(Q, c)}`);
   L.push("");
   L.push("提示: 私钥切勿提交/外传；配套签名/验签见 ecdsaSign / ecdsaVerify。");
-  // T362 产物协议（2026-09-02）：私钥 / 公钥分开交付下载按钮（恒烈指示）。
+  // T362 产物协议（2026-09-02）：私钥 / 公钥分开交付下载按钮（产品裁决）。
   // 私钥 = d 的 hex 文本；公钥 = 主格式（pubFormat）hex 文本，配套 pemkeys 可再转 PEM/JWK。
   const curveTag = (p.curve || "secp256k1").toLowerCase();
   return {

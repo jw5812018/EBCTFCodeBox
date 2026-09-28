@@ -137,12 +137,13 @@ export default {
   },
 
   base69: {
-    what: "A niche encoding using a 69-character printable ASCII alphabet. Packs bits at slightly better density than Base64.",
+    what: "A niche encoding using a 69-character printable ASCII alphabet. Each 7-byte block becomes 8 pairs of characters; a trailing marker records how many bytes were padded.",
     principle:
-      "Similar to Base64 but with a 69-char alphabet, producing a different bit-per-character ratio. Rarely seen outside CTF puzzles.",
+      "Take 7 bytes at a time as a bit string, cut it into 7-bit groups, and write each group (value 0-127) as two base-69 characters (low digit first).\n\n" +
+      "A trailing `N=` marker records the padding: $N = (7 - (\\text{bytes} \\bmod 7)) \\bmod 7$, so $N$ is 1-6 when a marker is present and 0 (no marker) when the byte count is a multiple of 7.",
     usage: "Paste base69-encoded text to decode; encode direction converts input.",
     examples: [
-      { in: "1Pr", out: "Hi" },
+      { in: "kAaAgAAAAAAAAA5=", out: "Hi", desc: "trailing 5= is the padding marker" },
     ],
     tips: [
       "Unusual printable characters in roughly uniform distribution, not matching Base64 alphabet → try base69.",

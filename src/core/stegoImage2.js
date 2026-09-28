@@ -1,5 +1,5 @@
 /*
- * stegoImage2.js — 图像隐写扩展组（T96，cat:'stego'）。
+ * stegoImage2.js — 图像隐写扩展组（T96，cat:'image'）。
  *
  * 依赖: stegoImage.js（查重，不碰；已有 pngText/exifExtract 等文本块读写，本文件不重复）。
  *
@@ -19,6 +19,8 @@
 import { register } from "./registry.js";
 import { encodePNG } from "./mcMap.js";
 import { streamCompress } from "./compress.js";
+import { inflateRaw } from "./pcapDeep.js";
+import { pngChunkRawExport } from "./pngChunks.js";
 
 // ============ 通用工具（自包含，不依赖 stegoImage2 内部函数） ============
 
@@ -168,6 +170,14 @@ function pngCheckSig(bytes) {
   for (let i = 0; i < 8; i++) if (bytes[i] !== PNG_SIG[i]) return false;
   return true;
 }
+// zlib 流解压（RFC 1950）：仓库内纯 JS inflate（pcapDeep.js），替代可选 globalThis.pako
+function inflateZlibLocal(zb) {
+  if (!zb || zb.length < 6) throw new Error("zlib 数据过短");
+  const cmf = zb[0], flg = zb[1];
+  if ((cmf & 0x0f) !== 8 || (((cmf << 8) | flg) % 31) !== 0) throw new Error("zlib 头非法");
+  return inflateRaw(zb.subarray(2, zb.length - 4));
+}
+
 /** 返回 [{type, len, dataOff, totalOff}]，到 IEND 为止（含 IEND）。 */
 function pngParseChunks(bytes) {
   const chunks = [];
@@ -227,11 +237,9 @@ function pngChunkListRun(text, p) {
       const method = nul >= 0 ? data[nul + 1] : 0;
       const comp = nul >= 0 ? data.subarray(nul + 2) : new Uint8Array(0);
       let val = null;
-      if (typeof globalThis !== "undefined" && globalThis.pako && globalThis.pako.inflate) {
-        try { val = utf8(globalThis.pako.inflate(comp)); } catch (e) { val = null; }
-      }
+      try { val = utf8(inflateZlibLocal(comp)); } catch (e) { val = null; }
       if (val !== null) lines.push(`  zTXt: "${kw}" = "${val}"`);
-      else lines.push(`  zTXt: "${kw}" = (zlib 压缩，方法=${method}，${comp.length} 字节；hex 前32: ${hex(comp, 32)})`);
+      else lines.push(`  zTXt: "${kw}" = (zlib 压缩，方法=${method}，${comp.length} 字节，解压失败；hex 前32: ${hex(comp, 32)})`);
     } else if (c.type === "iTXt") {
       const nul1 = data.indexOf(0);
       const kw = nul1 >= 0 ? latin1(data.subarray(0, nul1)) : "";
@@ -248,10 +256,8 @@ function pngChunkListRun(text, p) {
         if (compFlag === 0) val = utf8(raw);
         else {
           let dec = null;
-          if (typeof globalThis !== "undefined" && globalThis.pako && globalThis.pako.inflate) {
-            try { dec = utf8(globalThis.pako.inflate(raw)); } catch (e) {}
-          }
-          val = dec !== null ? dec : `(zlib 压缩，${raw.length} 字节；需 pako)`;
+          try { dec = utf8(inflateZlibLocal(raw)); } catch (e) { dec = null; }
+          val = dec !== null ? dec : `(zlib 压缩，${raw.length} 字节，解压失败)`;
         }
       }
       lines.push(`  iTXt: "${kw}" = "${val}"`);
@@ -321,6 +327,33 @@ function pngChunkListRun(text, p) {
  // ICC 检测
   const hasIccp = chunks.some((c) => c.type === "iCCP");
   if (hasIccp) lines.push("", "⚠ 检测到 iCCP chunk（ICC profile），可用 iccStrip op 剥离");
+
+ // 原块/PLTE/索引流导出（p.exportRaw）：raw = 长度+类型+数据+CRC 整块原字节
+  if (p && p.exportRaw) {
+    const files = [];
+    chunks.forEach((c, i) => {
+      const totalLen = Math.min(c.len + 12, bytes.length - c.totalOff);
+      if (totalLen > 0) files.push({ name: `chunk_${String(i).padStart(2, "0")}_${c.type}.bin`, mime: "application/octet-stream", bytes: bytes.slice(c.totalOff, c.totalOff + totalLen) });
+    });
+    const plteC = chunks.find((c) => c.type === "PLTE");
+    if (plteC) {
+      lines.push("", `导出: PLTE ${Math.floor(plteC.len / 3)} 项（${plteC.len} 字节）`);
+      files.push({ name: "PLTE.bin", mime: "application/octet-stream", bytes: bytes.slice(plteC.dataOff, plteC.dataOff + plteC.len) });
+    }
+   // 调色板图附加索引位流（unfilter 后逐行打包索引；色彩类型 3 专有）
+    try {
+      const rx = pngChunkRawExport(bytes);
+      if (rx && rx.indexStream) {
+        lines.push(`导出: 索引位流 ${rx.indexStream.length} 字节（${rx.ihdr.width}×${rx.ihdr.height}，bitDepth=${rx.ihdr.bitDepth}）`);
+        files.push({ name: "index_stream.bin", mime: "application/octet-stream", bytes: rx.indexStream });
+      } else if (rx && rx.indexError) {
+        lines.push(`⚠ 索引位流导出失败: ${rx.indexError}`);
+      }
+    } catch (e) {
+      lines.push(`⚠ 索引位流导出失败: ${(e && e.message) || e}`);
+    }
+    return { text: lines.join("\n"), files };
+  }
 
   return lines.join("\n");
 }
@@ -894,7 +927,7 @@ async function extractGifFrames(text, p, checkCurrent) {
     lines.push(`[帧 ${idx + 1}] 位置=(${f.left},${f.top}) 尺寸=${f.width}×${f.height} 延迟=${f.delay * 10}ms 处置=${disposeNames[f.dispose] || f.dispose} 透明索引=${f.transparentIndex >= 0 ? f.transparentIndex : "无"}`);
     if (f.encoded) {
       decodedCount++;
-      // T422（恒烈 2026-09-06 下单）：帧 PNG 进单个压缩包，不再往报告里倾倒 dataURL
+      // T422（产品负责人 2026-09-06 下单）：帧 PNG 进单个压缩包，不再往报告里倾倒 dataURL
       //（旧版逐帧下载按钮 + 大文本正是卡死根因）。
     } else {
       lines.push("  (本帧无调色板或 LZW 解码失败，仅列信息)");
@@ -907,7 +940,7 @@ async function extractGifFrames(text, p, checkCurrent) {
   }
   if (frameEntries.length === 0) return lines.join("\n");
 
-  // T422（恒烈 2026-09-06 下单）：全部帧打包成单个 ZIP 一次性下载。
+  // T422（产品负责人 2026-09-06 下单）：全部帧打包成单个 ZIP 一次性下载。
   // 附 frames.txt 元数据（帧信息与报告一致，供离线核对）。
   const meta = lines.join("\n") + "\n";
   checkCurrent();
@@ -1029,15 +1062,17 @@ function iccStripRun(text, p) {
 
 // ============ register ============
 register({
-  id: "pngChunkList", family: "png", familyLabel: "chunks", cat: "stego", name: "PNG 全块解析",
-  desc: "列举 PNG 所有 chunk（IHDR/PLTE/tEXt/zTXt/iTXt/bKGD/iCCP/IDAT/IEND 等），解析文本块与元数据",
-  params: [],
+  id: "pngChunkList", family: "png", familyLabel: "chunks", cat: "image", name: "PNG 全块解析",
+  desc: "列举 PNG 所有 chunk（IHDR/PLTE/tEXt/zTXt/iTXt/bKGD/iCCP/IDAT/IEND 等），解析文本块与元数据（压缩文本经仓库内 inflate 解出，无需 pako）；可导出逐块原字节（含长度/类型/CRC）、PLTE 调色板与调色板索引位流",
+  params: [
+    { key: "exportRaw", label: "导出原块 / PLTE / 索引流", type: "bool", default: false },
+  ],
   run: pngChunkListRun,
   acceptsBytes: true,
 });
 
 register({
-  id: "jpegAppList", family: "jpeg", familyLabel: "app", cat: "stego", name: "JPEG APPn 段列举",
+  id: "jpegAppList", family: "jpeg", familyLabel: "app", cat: "image", name: "JPEG APPn 段列举",
   desc: "列举 JPEG 所有 APP0-APP15 段及 marker 段（SOF/DQT/DHT/COM 等），标识段内容",
   params: [],
   run: jpegAppListRun,
@@ -1045,7 +1080,7 @@ register({
 });
 
 register({
-  id: "gifComment", family: "gif", familyLabel: "comment", cat: "stego", name: "GIF 注释扩展",
+  id: "gifComment", family: "gif", familyLabel: "comment", cat: "image", name: "GIF 注释扩展",
   desc: "提取 GIF 89a 注释扩展块（0x21 0xFE），拼接所有 sub-block 文本",
   params: [],
   run: gifCommentRun,
@@ -1053,7 +1088,7 @@ register({
 });
 
 register({
-  id: "gifFrames", family: "gif", familyLabel: "frames", cat: "stego", name: "GIF 多帧提取",
+  id: "gifFrames", family: "gif", familyLabel: "frames", cat: "image", name: "GIF 多帧提取",
   desc: "逐帧解码合成并压缩为 PNG，单 ZIP 下载；默认全部帧，受4096帧/128MiB ZIP及像素、时间预算约束，失败不交付不完整包",
   params: [{ key: "maxFrames", label: "仅导出前N帧（0=全部，最大4096）", type: "number", default: 0 }],
   run: gifFramesRun,
@@ -1061,7 +1096,7 @@ register({
 });
 
 register({
-  id: "iccStrip", cat: "stego", name: "ICC 剥离",
+  id: "iccStrip", cat: "image", name: "ICC 剥离",
   desc: "剥离 ICC profile（PNG iCCP chunk / JPEG APP2 ICC_PROFILE 段），返回去 ICC 后的 base64",
   params: [],
   run: iccStripRun,

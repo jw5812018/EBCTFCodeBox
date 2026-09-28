@@ -25,6 +25,7 @@
  */
 import { register } from "./registry.js";
 import { aesEncrypt, aesDecrypt } from "./modern.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ---------- base64 字节互转（自写，避免依赖 modern.js 内部未导出符号） ----------
 function b64ToBytes(s) {
@@ -47,9 +48,7 @@ function asciiToBytes(s) {
 function utf8ToBytes(s) {
   return new TextEncoder().encode(String(s));
 }
-function bytesToUtf8(bytes) {
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-}
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // ---------- 哥斯拉 XOR（偏移 key[(i+1)&15]，自反） ----------
 function godzillaXor(data, keyBytes) {
@@ -77,7 +76,7 @@ register({
     const key = asciiToBytes((p && p.key) || GODZILLA_DEFAULT_KEY);
     if (key.length === 0) throw new Error("key 不能为空");
     const cipher = b64ToBytes(t);
-    return bytesToUtf8(godzillaXor(cipher, key));
+    return finishBytesDecode(godzillaXor(cipher, key), { textMode: "hex", name: "godzillaPhpXorBase64" });
   },
   // 加密：明文 → XOR → base64
   encode: (t, p) => {
@@ -103,7 +102,7 @@ register({
     if (key.length !== 16) throw new Error("AES 密钥须为 16 字节");
     const cipher = b64ToBytes(t);
     const plain = aesDecrypt(cipher, key, { mode: "ECB", pad: true });
-    return bytesToUtf8(plain);
+    return finishBytesDecode(plain, { textMode: "hex", name: "behinderAesEcb" });
   },
   // 加密：明文 → AES-ECB 加密 → base64
   encode: (t, p) => {

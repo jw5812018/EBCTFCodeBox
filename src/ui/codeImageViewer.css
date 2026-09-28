@@ -151,6 +151,14 @@
   from { opacity: 0; transform: scale(.96) translateY(8px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
+/* 退出：独立 keyframe 名 + forwards，播完由 250ms 兜底摘除 */
+.ci-modal-overlay.ci-closing { animation: ci-modal-fade-out var(--dur-4) var(--ease-in) forwards; }
+@keyframes ci-modal-fade-out { from { opacity: 1; } to { opacity: 0; } }
+.ci-modal-overlay.ci-closing .ci-modal-dialog { animation: ci-modal-pop-out var(--dur-4) var(--ease-in) forwards; }
+@keyframes ci-modal-pop-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(.96) translateY(8px); }
+}
 .ci-modal-head {
   display: flex;
   align-items: flex-start;

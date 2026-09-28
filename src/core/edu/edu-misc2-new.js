@@ -129,21 +129,44 @@ export default {
   },
 
   f5stego: {
-    what: "F5 JPEG 隐写提取：从 F5 隐写的 JPEG 里用密钥抽出隐藏字节流。忠实移植 f5stegojs 库，只提取不嵌入。",
+    what: "F5 JPEG 隐写 编/解：encode 用密钥把消息经矩阵编码写入 JPEG 的 DCT 系数并重打包；decode 从 F5 隐写的 JPEG 里用密钥抽出隐藏字节流。忠实移植 f5stegojs 库，嵌/提互通。",
     principle:
-      "F5 把数据藏在 JPEG 的 DCT 系数里（跳过 DC 系数）。提取流程：\n\n" +
+      "F5 把数据藏在 JPEG 的 DCT 系数里（跳过 DC 系数）。流程：\n\n" +
       "1. 熵解码 JPEG 拿到各分量 DCT 系数（取亮度分量 Y）\n" +
       "2. 用密钥做 RC4 变体 PRNG 生成伪随机流，再 Fisher-Yates 置换系数顺序\n" +
-      "3. 先抽 4 bit 定矩阵编码参数 k，再按 $(1, 2^k-1, k)$ 矩阵编码提取 hash → 字节流，全程 XOR gamma（keystream）\n" +
-      "4. 按 2/3 字节长度头截取真实 payload\n\n" +
+      "3. 先定矩阵编码参数 k，再按 $(1, 2^k-1, k)$ 矩阵编码，全程 XOR gamma（keystream）\n" +
+      "4. 按 2/3 字节长度头封装/截取真实 payload\n\n" +
+      "encode 方向：找 hash(码字奇偶位) == 待嵌 k bit 的非零系数码字改系数；找不到就收缩（绝对值减 1、符号不变），收缩到 0 抛弃换下一可用系数；k=1 退化为顺序 LSB。auto-k 按容量表选最大可用 k。\n\n" +
       "密钥是 F5 PRNG 的种子（f5stegojs 常用整数字节数组如 1,2,3,4,5,6,7，也支持口令/hex）。密钥错或非 f5stegojs 系样本，提出来的是噪声，长度头会显得离谱。",
-    usage: "拖入 JPEG（或粘 hex/base64），填密钥。密钥格式可选：自动/整数列表/口令文本/hex。输出隐藏字节的 hex + ASCII + UTF-8 + F5 容量诊断 + flag 命中。仅提取。",
+    usage: "decode：拖入 JPEG（或粘 hex/base64），填密钥，输出隐藏字节 hex + ASCII + UTF-8 + 容量诊断 + flag 命中。encode：拖入载体 JPEG，参数填密钥与隐藏消息（k 留 0 自动选），产物为可下载的隐写 JPEG。嵌/提两侧密钥须一致。",
     examples: [
       { in: "（F5 隐写 JPEG）", param: "key=1,2,3,4,5,6,7 keyFormat=ints", out: "提取的字节流 hex/ASCII + 诊断" },
+      { in: "（普通 JPEG 载体）", param: "key=1,2,3,4,5,6,7 message=flag{...}", out: "f5_stego.jpg 产物 + 嵌入统计（k/改动/收缩）" },
     ],
-    tips: ["密钥和 keyFormat 都要对上，f5stegojs 常见写法是整数列表如 1,2,3,4,5,6,7。", "提取失败或长度头离谱，多半是密钥错，或该 JPEG 是原始 Java F5（口令派生不同，本 op 不解）。"],
+    tips: ["密钥和 keyFormat 都要对上，f5stegojs 常见写法是整数列表如 1,2,3,4,5,6,7。", "提取失败或长度头离谱，多半是密钥错，或该 JPEG 是原始 Java F5（口令派生不同，本 op 不解）。", "载图被重新压缩/缩放会破坏载荷——传输用原文件；本工具嵌入的图可与原版 f5stegojs 互通。"],
     aka: ["f5隐写", "f5 jpeg", "f5stego", "f5stegojs", "jpeg隐写提取", "f5 steganography",
-      "dct系数隐写", "f5提取", "jpeg dct隐写", "f5 extract", "矩阵编码隐写", "F5隐写"],
+      "dct系数隐写", "f5提取", "jpeg dct隐写", "f5 extract", "矩阵编码隐写", "F5隐写",
+      "f5嵌入", "f5 embed", "f5写入", "jpeg隐写嵌入", "f5 隐写加密", "f5 compress"],
+  },
+
+  pcmTransforms: {
+    what: "PCM 波形变换：对 WAV（8/16/24/32 位整数 PCM）做声道差 / 一阶差分 / 波形反相 / 时间倒放 / 阈值位流五档逐样本变换，产物可下载 WAV 或位流。音频类 misc 题的基础手术刀。",
+    principle:
+      "全部变换在样本域逐点进行（读回后统一为居中有符号域）：\n\n" +
+      "1. 声道差 L-R：宽域相减不回绕，输出 32bit WAV，越界饱和并报告计数——立体声隐写的第一探针\n" +
+      "2. 一阶差分 $d_n = x_n - x_{n-1}$：差分把低频能量压到零附近，能量异常点即人为改写\n" +
+      "3. 波形反相 $-x$：定点补码环绕；左右声道反相叠加可抵消伴奏留出差异轨\n" +
+      "4. 时间倒放：每声道独立倒序——倒放藏话（backmasking）类题第一步\n" +
+      "5. 阈值位流：样本 $> T$ 记 1 否则 0（分窗档每窗取 max 再比），LSB-first 打包并给游程统计\n\n" +
+      "算术在「宽位域」做后按位深回绕（wrap）：16 位在 int16 域环绕、24 位在 $[-2^{23},2^{23})$、32 位在 int32 域环绕，与 numpy 定点环绕一致；$-x$ 对 $-2^{15}$ 等最小值环绕回自身是补码固有不对称。",
+    usage: "拖入 WAV（或粘 base64/hex），选变换档与参数。声道差输出 32bit 单声道 WAV；差分/反相/倒放按原格式重建 WAV；阈值位流输出 LSB-first 打包 bin + 游程统计，可接一键解码继续分析。IEEE float 与压缩格式显式拒绝。",
+    examples: [
+      { in: "（立体声 WAV）", param: "mode=chdiff", out: "chdiff.wav + 饱和计数" },
+      { in: "（倒放藏话的 WAV）", param: "mode=reverse", out: "reversed.wav（倒放后直接听）" },
+    ],
+    tips: ["声道差全零或极小说明两声道几乎相同——数据多半不在「声道差」这一层。", "倒放/反相都是对合变换：再做一次即还原。阈值位流不可逆，无逆操作。", "压缩音频（mp3 等）先转 WAV 再喂本 op。"],
+    aka: ["pcm变换", "pcm transforms", "声道差", "音频声道差", "左右声道差", "波形反相",
+      "音频反相", "时间倒放", "音频倒放", "倒放音频", "一阶差分", "阈值位流", "pcm波形"],
   },
 
   spectrogram: {

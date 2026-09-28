@@ -85,7 +85,7 @@ export const CTF_HOT_META = {
   rsaFermat:         { rank: 2, note: "费马分解，p、q 相近时秒解" },
   rsaCrt:            { rank: 2, note: "CRT/Hastad 相关，dp/dq 已知" },
 
- // ---- 现代密码学工具（v0.1.6 密钥生命周期/签名/PQC 扩充；恒烈 2026-09-02 指示与常用算法同权高亮。
+ // ---- 现代密码学工具（v0.1.6 密钥生命周期/签名/PQC 扩充；产品负责人 2026-09-02 指示与常用算法同权高亮。
  //      仅星标 + 搜索加权，不参与 magic 一把梭——keygen/签名类无 detect，本就不该进）----
   rsaGenKeyPair:     { rank: 1, note: "RSA 密钥对生成（PEM 导出），非对称工具入口" },
   sm2:               { rank: 1, note: "SM2 国密椭圆曲线，加解密/签名/密钥交换主力" },

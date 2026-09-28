@@ -1,5 +1,5 @@
 /*
- * jpgSizeRecover.js — JPEG 宽高修复（T345，cat:'forensic'）。
+ * jpgSizeRecover.js — JPEG 宽高修复（T345，cat:'image'）。
  *
  * 场景：CTF 经典「改高度藏图」的 JPEG 版 —— SOF 段声明的宽高被改小，
  * 查看器按声明值裁掉下方内容。JPEG 的 SOF 没有校验和（不像 PNG IHDR 有 CRC32），
@@ -299,6 +299,8 @@ function jpgSizeRecoverRun(text, p) {
     ? (p.rawBytes instanceof Uint8Array ? p.rawBytes : new Uint8Array(p.rawBytes))
     : b64ToBytes(text);
   const mode = (p && p.mode) || "auto";
+  // 注意：非 JPEG 输入**必须抛错**（本文件末尾自检④写死了该契约），
+  // 调用方（如 imageAnalysis 的拖入路径）自行 try/catch 判容器。
   const parsed = jpegParse(buf);
   const { sof, dri } = parsed;
   const hmax = Math.max(1, ...sof.comps.map((c) => c.h));
@@ -506,7 +508,7 @@ function tamperHeight(jpeg, fakeH) {
 // ============ register ============
 
 register({
-  id: "jpgSizeRecover", family: "jpeg", familyLabel: "sizerecover", cat: "stego", name: "JPEG 宽高修复",
+  id: "jpgSizeRecover", family: "jpeg", familyLabel: "sizerecover", cat: "image", name: "JPEG 宽高修复",
   desc: "基线 JPEG 数 MCU 反推真实高度（SOF 无校验和，熵解码扫描数据数块即得；CTF 改高度藏图的 JPEG 版）+ 手动强制宽高，输出修复后 base64",
   params: [
     { key: "mode", label: "模式", type: "select", default: "auto",

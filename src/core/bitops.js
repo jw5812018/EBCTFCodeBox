@@ -17,13 +17,16 @@
  * 纯算法无外部依赖；变换在字节层，往返可逆（bitPlaneExtract 除外，标注单向）。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode, decodeUtf8Lossy } from "./bytesIo.js";
 
 // ============ 字符串 / 字节 / Hex 工具 ============
 function strToBytes(s) {
   return new TextEncoder().encode(String(s));
 }
+// 保留导出面：有损解码实现已收敛到 bytesIo（全仓唯一一处 fatal:false）。
+// 注意：decode 出口**不再**用它 —— 那里用 finishBytesDecode，否则会静默产出 U+FFFD。
 function bytesToStr(b) {
-  return new TextDecoder("utf-8", { fatal: false }).decode(b);
+  return decodeUtf8Lossy(b);
 }
 function bytesToHex(b) {
   let s = "";
@@ -165,7 +168,7 @@ register({
   desc: "每字节 8 位镜像翻转（bit 0↔7, 1↔6...）。encode: 文本→Hex；decode: Hex→文本。自逆变换。",
   params: [],
   encode: (t) => bytesToHex(bitReverseBytes(strToBytes(t))),
-  decode: (t) => bytesToStr(bitReverseBytes(hexToBytes(t))),
+  decode: (t) => finishBytesDecode(bitReverseBytes(hexToBytes(t)), { textMode: "hex", name: "bitReverse" }),
 });
 
 // 2. bitRotate（循环移位，encode 正向 / decode 反向）
@@ -188,7 +191,7 @@ register({
     const dir = (p && p.dir) || "left";
     const n = Number((p && p.bits) || 1);
     const inv = dir === "right" ? "left" : "right";
-    return bytesToStr(bitRotateBytes(hexToBytes(t), inv, n));
+    return finishBytesDecode(bitRotateBytes(hexToBytes(t), inv, n), { textMode: "hex", name: "bitRotate" });
   },
 });
 
@@ -217,7 +220,7 @@ register({
   decode: (t, p) => {
     const group = Number((p && p.group) || 2);
     if (p && p.mode === "hex") return byteSwapHexIO(t, group);
-    return bytesToStr(byteSwapBytes(hexToBytes(t), group));
+    return finishBytesDecode(byteSwapBytes(hexToBytes(t), group), { textMode: "hex", name: "byteSwap" });
   },
 });
 
@@ -307,7 +310,7 @@ register({
  // 逆运算：add→sub, sub→add, mul→mul(逆元)
     const invOp = op === "add" ? "sub" : op === "sub" ? "add" : "mul";
     const invKey = op === "mul" ? modInverse256(key) : key;
-    return bytesToStr(byteArithBytes(hexToBytes(t), invOp, invKey));
+    return finishBytesDecode(byteArithBytes(hexToBytes(t), invOp, invKey), { textMode: "hex", name: "byteArith" });
   },
 });
 
@@ -336,7 +339,7 @@ register({
   decode: (t, p) => {
     if (p && p.mode === "hex") return bytesToHex(byteReverseBytes(hexToBytes(t)));
     // 文本模式 decode：Hex → 倒序字节 → UTF-8 文本（还原原文）
-    return bytesToStr(byteReverseBytes(hexToBytes(t)));
+    return finishBytesDecode(byteReverseBytes(hexToBytes(t)), { textMode: "hex", name: "byteReverse" });
   },
   detect: () => 0,
 });

@@ -73,6 +73,23 @@ export default {
     aka: ["wav头", "wav header", "riff解析", "wave结构", "wav头解析", "wav文件头", "riff wave", "音频头解析", "wav format chunk", "pcm头解析", "wave file header"],
   },
 
+  audioLsbEmbed: {
+    what: "音频 LSB 嵌入（出题）：把一段载荷按位写进 WAV 每个 PCM 采样值的最低位（或每样本多位），生成听不出差别的隐写 WAV，用于自己出音频隐写题。",
+    principle:
+      "PCM 样本是整数（8/16/24/32 位）。改采样值最低位只让音量变动极微、人耳听不出，却能逐样本塞 1 比特（每样本取 N 位则塞 N 比特）。写入顺序与 audioLsb 提取一一对应：按帧 → 选中声道 → 每样本低 N 位、MSB 先拼；故用相同「每样本位数 / 声道」即可原样取回。容量 = 帧数 × 选中声道数 × 每样本位数。",
+    usage: "拖入封面 WAV（或原始 PCM 字节），填要嵌入的载荷（文本或 hex/base64 二进制），选每样本位数与声道，下载生成的隐写 WAV；再用 audioLsb 按相同参数提取。",
+    examples: [
+      { in: "封面 WAV + 载荷 flag{...}", param: "16位/全声道/每样本1位", out: "隐写 WAV（文件下载）" },
+    ],
+    tips: [
+      "位布局与 audioLsb 提取一一对应，位数/声道必须一致才能取回；取错会得到乱码。",
+      "容量不足会明确报错并给出所需位/容量位。本格式是本项目自定义 PCM LSB 位流，不兼容 steghide / SilentEye 协议。",
+    ],
+    aka: [
+      "音频lsb嵌入", "audio lsb embed", "wav隐写嵌入", "音频隐写嵌入", "音频最低位嵌入",
+      "pcm lsb embed", "wav lsb嵌入", "音频最低有效位嵌入", "lsb出题", "音频隐写出题", "声音隐写嵌入",
+    ],
+  },
   audioLsb: {
     what: "音频 LSB 提取：和图片 LSB 一个思路，把秘密藏在 WAV 每个 PCM 采样值的最低位里，逐样本抠出来拼成隐藏比特流。",
     principle:

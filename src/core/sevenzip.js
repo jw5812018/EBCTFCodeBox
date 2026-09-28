@@ -24,6 +24,15 @@
  * 7z-wasm npm 包（https://www.npmjs.com/package/7z-wasm，命令行式 FS 接口）。
  */
 import { register } from "./registry.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ============================================================
 // 输入文本 → 字节（CTF 场景：hex / base64 / base64url / 原样 UTF-8）
@@ -165,6 +174,10 @@ function parse7zHeader(bytes) {
 const WASM_LOADER_URL = "../../public/wasm/7zz.js"; // emscripten MODULARIZE 工厂
 let _modPromise = null;   // 单例：并发只加载一次
 let _available = null;    // null=未试 / true=就绪 / false=缺失降级
+ // 输出收集槽：emscripten 在工厂 create 时一次性绑定 print/printErr，
+ // 事后改 mod.print 无效（实测 24.09 wasm：二次覆盖零输出）⇒ 必须在 create 时
+ // 装一个「读模块级 _stdoutSink」的转发闭包，每次 callMain 前后切换 sink。
+let _stdoutSink = null;
 
 /** 懒加载 7z-wasm，返回 module 或 null（缺失/失败降级，不抛）。 */
 async function load7zWasm() {
@@ -174,10 +187,11 @@ async function load7zWasm() {
       const factory = await import(/* @vite-ignore */ WASM_LOADER_URL);
       const create = factory.default || factory.SevenZip || factory.createSevenZip;
       if (typeof create !== "function") { _available = false; return null; }
- // 7z-wasm 工厂：await SevenZip({...})；抑制默认 stdout 噪音，收集到 buffer
+ // 7z-wasm 工厂：await SevenZip({...})；输出经 _stdoutSink 转发（见上）
       const mod = await create({
-        print: () => {},
-        printErr: () => {},
+        print: (t) => { if (_stdoutSink) _stdoutSink.push(String(t)); },
+        printErr: (t) => { if (_stdoutSink) _stdoutSink.push(String(t)); },
+        noInitialRun: true,
       });
       _available = true;
       return mod;
@@ -192,36 +206,75 @@ async function load7zWasm() {
 /** 是否已确认 wasm 可用（未试过返回 null）。 */
 function sevenZipWasmAvailable() { return _available; }
 
+// 按真实内容 magic 推虚拟文件名（7z CLI 靠扩展名+内容双线索定格式；
+// 坏头样本若给了错扩展名，7z 会按错误类型打开并失败，故按 magic 命名优先）。
+function sniffArchiveExt(bytes) {
+  const b = bytes;
+  const eq = (off, sig) => sig.every((v, i) => b[off + i] === v);
+  if (eq(0, [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C])) return "7z";
+  if (eq(0, [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00])) return "rar"; // RAR5
+  if (eq(0, [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00])) return "rar";       // RAR4
+  if (eq(0, [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00])) return "xz";
+  if (eq(0, [0x42, 0x5A, 0x68])) return "bz2";
+  if (eq(0, [0x1F, 0x8B])) return "gz";
+  if (eq(0, [0x50, 0x4B, 0x03, 0x04]) || eq(0, [0x50, 0x4B, 0x05, 0x06]) || eq(0, [0x50, 0x4B, 0x07, 0x08])) return "zip";
+  if (bytes.length >= 262 && eq(257, [0x75, 0x73, 0x74, 0x61, 0x72])) return "tar"; // ustar @257
+  return null;
+}
+
+// 递归清空虚拟 FS 目录（多卷/重复解压防串包：OUT 残留旧文件会污染本次产物）。
+function fsRmRf(FS, dir) {
+  let entries;
+  try { entries = FS.readdir(dir); } catch { return; }
+  for (const name of entries) {
+    if (name === "." || name === "..") continue;
+    const full = dir + "/" + name;
+    let st;
+    try { st = FS.stat(full); } catch { continue; }
+    if (FS.isDir(st.mode)) fsRmRf(FS, full);
+    else { try { FS.unlink(full); } catch { /* ignore */ } }
+  }
+  try { FS.rmdir(dir); } catch { /* ignore */ }
+}
+
 /**
  * 用 7z-wasm 执行命令行（列表 'l' / 解压 'x'），捕获 stdout。
  * 7z-wasm 接口：mod.FS.writeFile / mod.callMain(argv) / mod.FS.readdir。
- * @returns {{stdout:string, files:Array<{name:string,bytes:Uint8Array}>}|null} null=wasm 不可用
+ * name 可指定虚拟文件名（默认按内容 magic 推扩展名，未知则 in.bin 让 7z 纯按内容识别）。
+ * 返回 { stdout, files, code, ok }；ok=false 表示 7z 报错（退出码非 0 或输出含 ERROR，
+ * 两判据并用的原因：实测坏头档案 l/x 退出码仍为 0、错误只在文本里；无密码解加密包
+ * 则退出码非 0 且可能已落垃圾文件 ⇒ 失败时 files 置空，绝不把半解产物当结果）。
+ * wasm 不可用仍返回 null（调用方降级）。
  */
-async function run7zWasm(archiveBytes, { extract = false, password = "" } = {}) {
+async function run7zWasm(archiveBytes, { extract = false, password = "", name = "" } = {}) {
   const mod = await load7zWasm();
   if (!mod) return null;
-  const lines = [];
- // 重装 print 以捕获本次输出（工厂可能已固定 print，尽量二次覆盖）
-  try { mod.print = (t) => lines.push(t); mod.printErr = (t) => lines.push(t); } catch { /* readonly */ }
   const FS = mod.FS;
-  const IN = "in.7z";
+  const ext = sniffArchiveExt(archiveBytes);
+  const IN = name || (ext ? "in." + ext : "in.bin");
   const OUT = "out";
+  const lines = [];
+  _stdoutSink = lines;
+  let code = 0;
   try {
-    FS.writeFile(IN, archiveBytes);
+    try { fsRmRf(FS, OUT); } catch { /* ignore */ }
     try { FS.mkdir(OUT); } catch { /* 已存在 */ }
+    FS.writeFile(IN, archiveBytes);
     const argv = extract
       ? ["x", IN, "-o" + OUT, "-y", ...(password ? ["-p" + password] : [])]
       : ["l", IN, ...(password ? ["-p" + password] : [])];
- // callMain 退出码非 0 时 emscripten 可能抛 ExitStatus；捕获但保留已收集输出
+ // callMain 失败时 emscripten 抛裸数字（退出码）或 ExitStatus；统一取数值
     try { mod.callMain(argv); } catch (e) {
-      if (e && e.name !== "ExitStatus") lines.push("(7z 运行告警: " + (e.message || String(e)) + ")");
+      code = typeof e === "number" ? e : ((e && (e.status ?? e.code)) ?? -1);
     }
+    const ok = code === 0 && !/ERROR/i.test(lines.join("\n"));
     const files = [];
-    if (extract) collectFiles(FS, OUT, "", files);
-    return { stdout: lines.join("\n"), files };
+    if (extract && ok) collectFiles(FS, OUT, "", files);
+    return { stdout: lines.join("\n"), files, code, ok };
   } catch (e) {
-    return { stdout: "(7z-wasm FS 操作失败: " + (e && e.message ? e.message : String(e)) + ")", files: [] };
+    return { stdout: "(7z-wasm FS 操作失败: " + (e && e.message ? e.message : String(e)) + ")", files: [], code: -1, ok: false };
   } finally {
+    _stdoutSink = null;
     try { FS.unlink(IN); } catch { /* ignore */ }
   }
 }
@@ -254,7 +307,7 @@ function collectFiles(FS, dir, prefix, out, budget = { n: 0 }) {
 function bytesToOutput(bytes) {
   if (!bytes || bytes.length === 0) return { text: "", mode: "text" };
   try {
-    const s = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const s = _decodeUtf8Fatal(bytes);
     let ctrl = 0;
     for (const ch of s) {
       const c = ch.codePointAt(0);
@@ -329,6 +382,11 @@ async function sevenZipRun(text, p) {
  // ---- wasm 可用：输出 7z CLI 结果 ----
   lines.push("--- 7z-wasm " + (mode === "extract" ? "解压 (x)" : "列表 (l)") + " ---");
   if (res.stdout) lines.push(res.stdout);
+  if (!res.ok) {
+    lines.push("");
+    lines.push("✗ 7z 报告失败（退出码 " + res.code + "）：坏头/截断/密码错误均如实失败，不产出半解文件。");
+    return lines.join("\n");
+  }
   if (mode === "extract") {
     lines.push("");
     lines.push("解出文件: " + res.files.length + " 个" + (res.files.length >= 200 ? "（达 200 上限，截断）" : ""));
@@ -376,7 +434,7 @@ const INPUT_ENC_PARAM = {
 
 register({
   id: "sevenZipExtract",
-  cat: "forensic",
+  cat: "archive",
   name: "7z 归档解析 / 解压",
   desc: "识别 7z 签名 + 解析 SignatureHeader/StartHeader（CRC 校验）；放置 public/wasm/7zz.js 后可真列表/解压（LZMA 等，wasm 缺失自动降级）",
   params: [

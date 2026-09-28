@@ -23,10 +23,11 @@ export default {
     what: "Google 的 Plus Code（开放位置码 OLC）：把经纬度编成一串短代码，没有门牌号的地方也能精确定位。",
     principle:
       "在纬度 [-90,90]、经度 [-180,180] 的网格上逐级细分：每一对字符定位一层网格，字母表 `23456789CFGHJMPQRVWX`（去掉易混字符）。\n\n" +
-      "前 8 字符后插一个 `+` 分隔符，11 字符全码可定位到约几米。",
-    usage: "encode 把 `lat,lon` 转成 Plus Code（8 位短码或 11 位全码）。decode 把 Plus Code 转回坐标中心点。",
+      "第 8 个字符后插一个 `+` 分隔符；码长（显著位数，不含 +）决定精度：10 位约 14m，11 位网格码约 3m；不足 8 位用 `0` 填充（如 `7FG49Q00+`）。",
+    usage: "encode 把 `lat,lon` 转成 Plus Code（码长取显著位数，默认 10 位 = 11 字符含 +）。decode 把全码转回坐标中心点（短码需参考点，本 op 不支持）。",
     examples: [
-      { in: "39.9,116.4", param: "11 位全码", out: "8PFRW92X+2X", desc: "北京附近" },
+      { in: "39.9,116.4", param: "10 位全码", out: "8PFRWC22+22", desc: "北京附近" },
+      { in: "39.9,116.4", param: "11 位网格码", out: "8PFRWC22+222", desc: "北京附近（更精）" },
     ],
     tips: ["认它很容易：一串大写字母数字中间有个 `+`，且不含 0/1/A/E/I/O/U 等易混字符。", "谷歌地图直接搜 Plus Code 就能跳到那个点，无需注册地址。"],
     aka: ["plus code", "olc", "开放位置码", "google plus code", "加号码", "Open Location Code",

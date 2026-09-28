@@ -1,7 +1,7 @@
 /*
  * core/magic/magicClient.js — 一键解码主线程客户端（真多线程调度 + 优雅降级）
  *
- * 职责（恒烈需求：真多线程看门狗 + 中断接管）：
+ * 职责（产品裁决：真多线程看门狗 + 中断接管）：
  * - 复用**单个** magicWorker，在独立线程跑 magicDecode，主线程零阻塞（倒计时流畅/UI 不冻）。
  * - **中断接管**：新输入 → cancel() 硬杀旧 Worker + 重建 → 旧任务立即消失，历史不堆积不崩。
  * - **软死线部分结果**：Worker 到软死线回传 partial，onPartial 先渲染，final 到再补全。

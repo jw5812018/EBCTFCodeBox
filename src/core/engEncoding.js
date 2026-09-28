@@ -26,7 +26,7 @@
  *                  rwx 符号形 ↔ 3/4 位八进制 ↔ 二进制位 ↔ chmod 命令，特殊位
  *                  setuid(4)/setgid(2)/sticky(1) 映射 s/S/t/T。
  *
- * 对拍与测试：资料/工程留存/T508/批4_工程编码/test.mjs
+ * 对拍与测试（独立脚本核验）：
  * （xxd 实测向量、CyberChef tests 向量、scrdec 表与快照逐行核对、往返与异常）。
  * 本文件为自研实现，未拷贝 CyberChef/rison 任何代码（替换表为算法常量数据）。
  */
@@ -50,7 +50,8 @@ function hexdumpEncode(text, p) {
   if (!Number.isInteger(width) || width < 1 || width > 512)
     throw new Error(`Hexdump：每行字节数须为 1-512 的整数（当前 ${width}）。`);
   const upper = !!(p && p.upperCase);
-  const data = utf8Bytes(text);
+  // 字节直通：hexdump 展示的本来就是字节流，上游真字节直接转储。
+  const data = (p && p.rawBytes) || utf8Bytes(text);
   const groups = Math.ceil(width / 2);
   const hexAreaFull = width * 2 + groups; // 每字节 2 字符 + 每组尾 1 空格
   const lines = [];
@@ -142,7 +143,9 @@ function hexdumpDecode(text, p) {
 }
 
 register({
-  id: "hexdump", cat: "forensic", name: "Hexdump 互转（xxd）",
+  id: "hexdump", cat: "text", name: "Hexdump 互转（xxd）",
+  // encode 方向吃字节（转储对象是字节）；decode 输入是转储文本，不吃字节。
+  acceptsBytes: true,
   desc: "xxd 风格十六进制转储 ↔ 原文本：编码方向输出「偏移: 两字节一组 hex + ASCII」三栏（与 xxd 逐字节一致，行宽/大小写可调）；解码方向容忍 xxd / hexdump -C / CyberChef 等常见格式（含 * 重复行）",
   params: [
     { key: "width", label: "每行字节数（1-512）", type: "number", default: 16 },
@@ -162,7 +165,8 @@ const MODHEX_IDX = new Map([...MODHEX_ALPHA].map((c, i) => [c, i]));
 function modhexEncode(text, p) {
   const delim = (p && p.delim) || "none";
   const sep = delim === "space" ? " " : delim === "colon" ? ":" : delim === "comma" ? "," : "";
-  const data = utf8Bytes(text);
+  // 字节直通：modhex 是字节级十六进制替换，上游真字节直接编。
+  const data = (p && p.rawBytes) || utf8Bytes(text);
   if (!data.length) return "";
   const parts = [];
   for (const b of data) parts.push(MODHEX_ALPHA[b >> 4] + MODHEX_ALPHA[b & 15]);
@@ -200,6 +204,8 @@ register({
         { value: "comma", label: "逗号 ," },
       ] },
   ],
+  // encode 方向吃字节；decode 输入是 modhex 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: modhexEncode,
   decode: modhexDecode,
 });
@@ -369,7 +375,7 @@ function scrdecEncodeBody(plain) {
 function scrdecWrap(body) { return `#@~^AAAAAA==${body}AAAAAA==^#~@`; }
 
 register({
-  id: "scriptDecoder", cat: "forensic", name: "MS 脚本解码（.vbe/.jse）",
+  id: "scriptDecoder", cat: "filefmt", name: "MS 脚本解码（.vbe/.jse）",
   desc: "还原 Microsoft 编码脚本（scrdec 算法）：#@~^ 头 + 128×3 替换表按 64 步组合序列位置解码，@& @# @* @! @$ 逃逸还原；.vbe/.jse 取证常客，单向",
   params: [],
   run: scriptDecoderRun,
@@ -661,7 +667,7 @@ function unixPermsRun(text) {
 }
 
 register({
-  id: "unixPerms", cat: "forensic", name: "UNIX 文件权限",
+  id: "unixPerms", cat: "radix", name: "UNIX 文件权限",
   desc: "权限形态互转报告：755 / 4755 八进制 ↔ rwxr-xr-x / rwsr-xr-t 符号形 ↔ 二进制位 ↔ chmod 命令，含 setuid/setgid/sticky 特殊位与各身份明细",
   params: [],
   run: unixPermsRun,

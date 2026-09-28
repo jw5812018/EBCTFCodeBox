@@ -1,9 +1,9 @@
-// BUILD-STAMP: a0ccf800eab21027
+// BUILD-STAMP: 655f646dac2afc1a
 importScripts("./sw-assets.js");
 
 // The asset generator synchronizes BUILD-STAMP with the resource revision.
 
-const APP_VERSION = "0.1.7";
+const APP_VERSION = "0.1.8-beta3";
 const CACHE_PREFIX = "ebctf-shell-";
 const CACHE_NAME = `${CACHE_PREFIX}${APP_VERSION}-${self.__EBCTF_ASSET_REV}`;
 const ASSETS = self.__EBCTF_ASSETS;
@@ -34,13 +34,45 @@ const RUNTIME_CACHE_FIRST = [
 const isRuntimeCacheFirst = (pathname) =>
   RUNTIME_CACHE_FIRST.some((p) => pathname === p || pathname.startsWith(p));
 
+// 增量预缓存（2026-09-25）：预缓存清单随构建批次重生，BUILD-STAMP 变化即触发整轮更新。
+// 若每次都对全部条目 cache:"reload" 强制重下（约 694 项 / 13.6MB），用户在每次构建批次后
+// 的首次刷新都要等整轮传输完成。故改为条件请求协商：同名条目在**上一版缓存**里已存在时，
+// 带 If-None-Match / If-Modified-Since 复验；304 则直接复用旧响应（服务端逐字节确认未变），
+// 只有真变更的文件才传新内容。旧缓存不存在（首次安装）仍走全量。缓存名含 REV，新旧
+// 缓存并存期恰为本函数运行期，activate 末尾统一清理旧缓存。
 async function precacheAll() {
   const cache = await caches.open(CACHE_NAME);
+  const previous = new Map();
+  try {
+    const keys = await caches.keys();
+    for (const key of keys) {
+      if (!key.startsWith(CACHE_PREFIX) || key === CACHE_NAME) continue;
+      const oldCache = await caches.open(key);
+      for (const request of await oldCache.keys()) {
+        if (!previous.has(request.url)) previous.set(request.url, oldCache);
+      }
+    }
+  } catch { /* 旧缓存不可读则退化为全量下载 */ }
   for (let i = 0; i < ASSETS.length; i += BATCH_SIZE) {
     const batch = ASSETS.slice(i, i + BATCH_SIZE);
     await Promise.all(batch.map(async (url) => {
       const request = new Request(url, { cache: "reload" });
-      const response = await fetch(request);
+      let response = null;
+      const oldCache = previous.get(new URL(url, self.registration.scope).href);
+      if (oldCache) {
+        const old = await oldCache.match(url);
+        if (old && (old.headers.has("ETag") || old.headers.has("Last-Modified"))) {
+          const validators = new Headers();
+          if (old.headers.has("ETag")) validators.set("If-None-Match", old.headers.get("ETag"));
+          if (old.headers.has("Last-Modified")) validators.set("If-Modified-Since", old.headers.get("Last-Modified"));
+          try {
+            const revalidated = await fetch(new Request(url, { cache: "reload", headers: validators }));
+            if (revalidated.status === 304) response = old;
+            else if (revalidated.ok) response = revalidated;
+          } catch { /* 网络层异常落到下面的全量路径 */ }
+        }
+      }
+      if (!response) response = await fetch(request);
       if (!response.ok) throw new Error(`PWA 预缓存失败: ${url} (${response.status})`);
       await cache.put(request, response);
     }));

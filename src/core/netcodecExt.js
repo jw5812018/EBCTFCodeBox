@@ -16,6 +16,7 @@
  * 或 Buffer（node 测试）双兼容。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ============ base64 双环境兼容（浏览器 atob/btoa + node Buffer） ============
 function b64encodeBytes(bytes) {
@@ -41,14 +42,12 @@ function b64decodeToBytes(str) {
 function strToUtf8Bytes(s) {
   return new TextEncoder().encode(String(s));
 }
-function utf8BytesToStr(b) {
-  return new TextDecoder("utf-8", { fatal: false }).decode(b);
-}
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 function b64encodeStr(s) {
   return b64encodeBytes(strToUtf8Bytes(s));
 }
 function b64decodeStr(s) {
-  return utf8BytesToStr(b64decodeToBytes(s));
+  return finishBytesDecode(b64decodeToBytes(s), { textMode: "hex", name: "httpBasicAuth" });
 }
 
 // ============ 1. URL query 解析 ============
@@ -250,12 +249,29 @@ register({
 // 4. data URI 解析/构造（双向）
 register({
   id: "dataUriParse", cat: "text", name: "Data URI 解析",
+  // encode 方向吃字节（把字节封成 data: URI）；decode 输入是 URI 文本，不吃字节。
+  acceptsBytes: true,
   desc: "data URI 双向：encode 把文本按所选 MIME + 编码方式构造成 data: URI；decode 解析 data: URI 输出 MIME + 内容。",
   params: [
     { key: "mime", label: "MIME 类型（encode 用）", type: "text", default: "text/plain", placeholder: "text/plain" },
     { key: "base64", label: "用 base64 编码（encode 用）", type: "bool", default: false },
   ],
-  encode: (t, p) => buildDataUri(t, (p && p.mime) || "text/plain", !!(p && p.base64)),
+  encode: (t, p) => {
+    // 字节直通：把上游真字节封成 data: URI（内容→表示方向才吃字节）。
+    const raw = p && p.rawBytes;
+    if (raw) {
+      const mime = (p && p.mime) || "text/plain";
+      if (p && p.base64) return "data:" + mime + ";base64," + b64encodeBytes(raw);
+      const keep = /[A-Za-z0-9_.!~*'()-]/; // 与 encodeURIComponent 保留集一致
+      let s = "";
+      for (const b of raw) {
+        const c = String.fromCharCode(b);
+        s += keep.test(c) ? c : "%" + b.toString(16).toUpperCase().padStart(2, "0");
+      }
+      return "data:" + mime + "," + s;
+    }
+    return buildDataUri(t, (p && p.mime) || "text/plain", !!(p && p.base64));
+  },
   decode: (t) => parseDataUri(t),
   detect: (t) => (/^data:[^,]*,/i.test(String(t).trim()) ? 0.5 : 0),
 });

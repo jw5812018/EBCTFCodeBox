@@ -28,6 +28,7 @@
  * 契约：register({ id:"vmpc", cat:"modern", name, desc, params, encode, decode })。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 // ---- VMPC 引擎（照官方 C 实现逐函数） ----
 function makeVmpc() {
@@ -101,7 +102,7 @@ function parseBytes(p, keyName, label) {
 }
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 function bytesToHex(bytes) {
   let s = "";
@@ -137,7 +138,7 @@ function vmpcDecode(text, p = {}) {
   const ks = genKeystream(key, iv, data.length, mode);
   const out = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i++) out[i] = data[i] ^ ks[i];
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "vmpc" });
 }
 
 register({

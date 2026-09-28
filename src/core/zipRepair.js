@@ -1,5 +1,5 @@
 /*
- * zipRepair.js — ZIP 伪加密修复 / 置位（T346，cat:'forensic'，一对互逆 op）。
+ * zipRepair.js — ZIP 伪加密修复 / 置位（T346，cat:'archive'，一对互逆 op）。
  *
  * 场景：ZIP「伪加密」= 通用位标志（General Purpose Bit Flag）的加密位 bit0 被
  * 置 1，但压缩数据本身没加密 —— 解压软件据此误报「需要密码」。
@@ -449,7 +449,7 @@ function allEncrypted(b) {
 // ============ register ============
 
 register({
-  id: "zipRepair", family: "zip", familyLabel: "repair", cat: "forensic", name: "ZIP 伪加密修复",
+  id: "zipRepair", family: "zip", familyLabel: "repair", cat: "archive", name: "ZIP 伪加密修复",
   desc: "清除中央目录与本地文件头通用位标志的加密位（bit0，可连带强加密位 bit6）。走 EOCD→中央目录→本地头精确路径，不误伤压缩数据。伪加密=标志位被置 1 但数据未加密，清位即可正常解压；输出修复后 base64",
   params: [
     { key: "clearStrong", label: "同时清强加密位(bit6)", type: "bool", default: false },
@@ -459,7 +459,7 @@ register({
 });
 
 register({
-  id: "zipPseudoEncrypt", family: "zip", familyLabel: "pseudo", cat: "forensic", name: "ZIP 伪加密（置位）",
+  id: "zipPseudoEncrypt", family: "zip", familyLabel: "pseudo", cat: "archive", name: "ZIP 伪加密（置位）",
   desc: "把中央目录与本地文件头的加密位（bit0）置 1 而不动数据——制造「需要密码」假象，「ZIP 伪加密修复」的逆操作，可用于出题与演示；输出置位后 base64",
   params: [],
   run: zipPseudoEncryptRun,

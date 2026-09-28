@@ -6,6 +6,10 @@
  * 2) pcapHttpExtract HTTP 对象提取：基于 TCP 重组解析请求/响应，处理 chunked/gzip/deflate，导出文件/文本
  * 3) pcapDnsTunnel DNS 隧道检测：提取 query 子域名，尝试 base32/base64/hex 拼接解码
  * 4) pcapIcmpPayload ICMP 载荷提取：ICMP echo payload 按 seq 拼接（隐写外泄）
+ * 5) pcapFieldExtract 字段提取/过滤：ip.id / TTL / TCP urgent pointer / DNS qry-answer
+ *    逐包字段 + 协议/方向过滤，table / tsv / values 三档输出（values 可直接喂 TTL 隐写）
+ * 6) 原字节产物与重组诊断：dump 模式按 产物协议返回 { text, files }；
+ *    TCP 重组附带乱序/重传/冲突/缺段（偏移+seq 双坐标）/截断诊断，缺段字节以 0x00 占位并显式报告
  *
  * 复用 pcapParse.js 的具名导出（不重复造 pcap 解析轮子）：
  * - inputToBytes(text, enc) hex/base64/auto → Uint8Array
@@ -84,10 +88,15 @@ function concatBytes(chunks) {
 
 const MAX_STREAM = 64 * 1024 * 1024; // 单流重组上限，防 OOM
 
+// 产物文件名净化（ascii 安全子集，限长）
+function sanitizeFileStem(s) {
+  return String(s).replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "out";
+}
+
 // ============================================================
 // 共享：解码 pcap → 逐包分帧结果
 // ============================================================
-function decodePcap(text, enc, p) {
+export function decodePcap(text, enc, p) {
   if ((!text || !String(text).trim()) && !(p && p.rawBytes && p.rawBytes.length)) {
     return { error: "（空输入）请输入 pcap/pcapng 文件的 hex 或 base64 编码。" };
   }
@@ -125,7 +134,7 @@ function seqDelta(seq, base) {
 }
 
 // 收集所有 TCP 段并按连接聚合。连接以无向 5 元组标识，方向按首见段确定 a→b / b→a。
-function reassembleFlows(dissected) {
+export function reassembleFlows(dissected) {
   const flows = new Map(); // connKey → flow
   for (const d of dissected) {
     const l3 = d.layers && d.layers.l3;
@@ -152,9 +161,16 @@ function reassembleFlows(dissected) {
 }
 
 // 重组单方向：确定基准 ISN → 按相对偏移放置 → 首次写入优先（重传去重）。
-function reassembleDir(dir) {
+// 诊断指标约定（与 报告.md 同步声明，参考实现按同口径对拍）：
+//   retransSegs   到达时整段落在已覆盖区（零新字节）→ 纯重传/重复段
+//   oooSegs       到达时起点早于已见流尾且带新字节 → 乱序补洞段
+//   conflictBytes 重叠区内容与已写入不一致的字节数（保留首写，后到冲突字节丢弃并计数）
+//   gaps          最终仍未覆盖的流偏移区间 [from,to)（字节以 0x00 占位），同时给绝对 seq
+//   truncated     超过 MAX_STREAM 截断，或段尾被上限截掉
+export function reassembleDir(dir) {
   const segs = dir.segs;
-  if (segs.length === 0) return new Uint8Array(0);
+  const diag = { segs: segs.length, retransSegs: 0, oooSegs: 0, conflictBytes: 0, gaps: [], truncated: false, discardedBeforeBase: 0 };
+  if (segs.length === 0) return { bytes: new Uint8Array(0), diag };
   let base = dir.isn;
   if (base === null || base === undefined) {
  // 无 SYN：以按 seq 升序的首段为基准
@@ -165,27 +181,55 @@ function reassembleDir(dir) {
   let maxEnd = 0;
   for (const s of segs) {
     const off = seqDelta(s.seq, base);
-    if (off < 0) continue;
+    if (off < 0) { diag.discardedBeforeBase++; continue; }
     const end = off + s.data.length;
     if (end > maxEnd) maxEnd = end;
   }
-  if (maxEnd <= 0) return new Uint8Array(0);
-  if (maxEnd > MAX_STREAM) maxEnd = MAX_STREAM;
+  if (maxEnd <= 0) return { bytes: new Uint8Array(0), diag };
+  if (maxEnd > MAX_STREAM) { maxEnd = MAX_STREAM; diag.truncated = true; }
   const out = new Uint8Array(maxEnd);
   const filled = new Uint8Array(maxEnd);
  // 按到达顺序（index）写，首次写入优先
   const byArrival = segs.slice().sort((x, y) => x.index - y.index);
+  let watermark = -1; // 已见最大流尾（相对 base），乱序/重传判定用
   for (const s of byArrival) {
     const off = seqDelta(s.seq, base);
     if (off < 0) continue;
+    if (off + s.data.length > maxEnd) diag.truncated = true;
     const n = Math.min(s.data.length, maxEnd - off);
+    let newBytes = 0;
     for (let i = 0; i < n; i++) {
-      if (!filled[off + i]) { out[off + i] = s.data[i]; filled[off + i] = 1; }
+      if (!filled[off + i]) { out[off + i] = s.data[i]; filled[off + i] = 1; newBytes++; }
+      else if (out[off + i] !== s.data[i]) diag.conflictBytes++;
     }
+    if (watermark >= 0 && off < watermark) {
+      if (newBytes === 0) diag.retransSegs++;
+      else diag.oooSegs++;
+    }
+    if (off + n > watermark) watermark = off + n;
   }
-  return out;
+ // 缺段扫描：filled 0 游程 → 流偏移 + 绝对 seq（偏移来源可追）
+  for (let i = 0; i < maxEnd;) {
+    if (!filled[i]) {
+      let j = i;
+      while (j < maxEnd && !filled[j]) j++;
+      diag.gaps.push({ from: i, to: j, fromSeq: (base + i) >>> 0, toSeq: (base + j) >>> 0 });
+      i = j;
+    } else i++;
+  }
+  return { bytes: out, diag };
 }
 
+// 诊断摘要（列表模式单行）
+function diagLine(diag) {
+  const parts = [];
+  if (diag.retransSegs) parts.push("重传" + diag.retransSegs + "段");
+  if (diag.oooSegs) parts.push("乱序" + diag.oooSegs + "段");
+  if (diag.conflictBytes) parts.push("冲突" + diag.conflictBytes + "B");
+  if (diag.gaps.length) parts.push("缺段" + diag.gaps.length + "处(" + diag.gaps.map((g) => "[" + g.from + "," + g.to + ")").join(",") + ")");
+  if (diag.truncated) parts.push("截断");
+  return parts.length ? "  ⚠ " + parts.join("/") : "";
+}
 function pcapTcpReassembleRun(text, p = {}) {
   const res = decodePcap(text, p.inputEnc, p);
   if (res.error) return res.error;
@@ -201,8 +245,8 @@ function pcapTcpReassembleRun(text, p = {}) {
   for (const [, flow] of flows) {
     const dirs = [];
     for (const [, dir] of flow.dirs) {
-      const bytes = reassembleDir(dir);
-      dirs.push({ label: `${dir.from} → ${dir.to}`, bytes, segs: dir.segs.length });
+      const { bytes, diag } = reassembleDir(dir);
+      dirs.push({ label: `${dir.from} → ${dir.to}`, bytes, segs: dir.segs.length, diag });
     }
     list.push({ a: flow.a, b: flow.b, dirs, firstIndex: flow.firstIndex });
   }
@@ -217,10 +261,17 @@ function pcapTcpReassembleRun(text, p = {}) {
     if (flowSel < 0 || flowSel >= list.length) return `flowIndex 越界：应为 0..${list.length - 1}`;
     const f = list[flowSel];
     lines.push(`▼ 流 #${flowSel}  ${f.a} ⇄ ${f.b}（完整转储）`);
-    for (const dir of f.dirs) {
+    f.dirs.forEach((dir) => {
       lines.push("");
       lines.push(`— 方向 ${dir.label}（${dir.segs} 段，重组后 ${dir.bytes.length} 字节）—`);
-      if (dir.bytes.length === 0) { lines.push("  (无数据)"); continue; }
+      const dq = diagLine(dir.diag);
+      if (dq) lines.push(dq);
+      for (const g of dir.diag.gaps) {
+        lines.push(`  缺段: 流偏移 [${g.from},${g.to}) ⇔ 绝对 seq [${g.fromSeq},${g.toSeq})，该区间字节为 0x00 占位（真实数据未捕获）`);
+      }
+      if (dir.diag.conflictBytes) lines.push(`  冲突重传: ${dir.diag.conflictBytes} 字节与先到内容不一致，已保留先到版本`);
+      if (dir.diag.truncated) lines.push("  截断: 重组超过上限，超出部分丢弃");
+      if (dir.bytes.length === 0) { lines.push("  (无数据)"); return; }
       if (isMostlyText(dir.bytes, 2048)) {
         lines.push("[文本]");
         lines.push(latin1(dir.bytes));
@@ -228,8 +279,14 @@ function pcapTcpReassembleRun(text, p = {}) {
         lines.push("[二进制 · hex]");
         lines.push(toHex(dir.bytes));
       }
-    }
-    return lines.join("\n");
+    });
+ // 产物协议：各方向原字节下载
+    const files = [];
+    f.dirs.forEach((dir, di) => {
+      if (dir.bytes.length === 0) return;
+      files.push({ name: `flow${flowSel}_dir${di}_${sanitizeFileStem(dir.label)}.bin`, mime: "application/octet-stream", bytes: dir.bytes });
+    });
+    return files.length ? { text: lines.join("\n"), files } : lines.join("\n");
   }
 
  // 列表模式
@@ -240,6 +297,8 @@ function pcapTcpReassembleRun(text, p = {}) {
     lines.push(`▼ 流 #${i}  ${f.a} ⇄ ${f.b}`);
     for (const dir of f.dirs) {
       lines.push(`  ${dir.label}  ${dir.segs} 段 → ${dir.bytes.length} 字节`);
+      const dq = diagLine(dir.diag);
+      if (dq) lines.push(dq);
       if (dir.bytes.length > 0) {
         const n = Math.min(dir.bytes.length, preview);
         if (isMostlyText(dir.bytes, n)) {
@@ -497,7 +556,7 @@ function pcapHttpExtractRun(text, p = {}) {
   flowList.sort((x, y) => x.firstIndex - y.firstIndex);
   for (const flow of flowList) {
     for (const [, dir] of flow.dirs) {
-      const bytes = reassembleDir(dir);
+      const { bytes } = reassembleDir(dir);
       if (bytes.length === 0) continue;
       const msgs = parseHttpStream(bytes);
       for (const m of msgs) objects.push({ ...m, flowLabel: `${dir.from} → ${dir.to}` });
@@ -505,7 +564,18 @@ function pcapHttpExtractRun(text, p = {}) {
   }
   if (objects.length === 0) return "重组了 TCP 流，但未解析出 HTTP 请求/响应。可能是加密(HTTPS)或非 HTTP 协议。";
 
- // dump 指定对象的 body（hex）
+ // 产物命名：Content-Disposition filename > 请求 URL 末段 > objN
+  function httpObjectName(o, idx) {
+    const cd = (o.headers["content-disposition"] || "").match(/filename\*?="?([^";]+)"?/i);
+    if (cd && cd[1] && cd[1].trim()) return sanitizeFileStem(cd[1]);
+    if (o.kind === "request") {
+      const m = o.startLine.match(/^\S+\s+\S*\/([^?\s]*)/);
+      if (m && m[1].trim()) return sanitizeFileStem(m[1]) || `obj${idx}`;
+    }
+    return `obj${idx}`;
+  }
+
+ // dump 指定对象的 body（hex + 原字节下载）
   if (dumpSel !== null) {
     if (dumpSel < 0 || dumpSel >= objects.length) return `dumpIndex 越界：应为 0..${objects.length - 1}`;
     const o = objects[dumpSel];
@@ -517,7 +587,16 @@ function pcapHttpExtractRun(text, p = {}) {
     if (o.body.length === 0) { lines.push("(空 body)"); return lines.join("\n"); }
     if (isMostlyText(o.body, 4096)) { lines.push("[文本]"); lines.push(latin1(o.body)); }
     else { lines.push("[二进制 · hex]"); lines.push(toHex(o.body)); }
-    return lines.join("\n");
+    if (o.truncated) lines.push("⚠ body 截断：Content-Length 声明超出流内可用字节，以上为流内实际字节（原字节产物同样只含实际捕获部分）");
+ // 产物协议：body 原字节下载（解码后为准；存在传输编码时另附 raw）
+    const stem = httpObjectName(o, dumpSel);
+    const files = [];
+    const mime = (o.contentType.split(";")[0] || "").trim() || "application/octet-stream";
+    files.push({ name: `http${dumpSel}_${stem}.bin`, mime, bytes: o.body });
+    if (o.bodyRaw !== o.body && o.bodyRaw.length > 0) {
+      files.push({ name: `http${dumpSel}_${stem}_raw.bin`, mime: "application/octet-stream", bytes: o.bodyRaw });
+    }
+    return { text: lines.join("\n"), files };
   }
 
   const lines = [];
@@ -608,29 +687,30 @@ function pcapDnsTunnelRun(text, p = {}) {
   const res = decodePcap(text, p.inputEnc, p);
   if (res.error) return res.error;
 
- // 收集 DNS query（qr=0）；无 query 则退回全部 DNS 问询
+ // side：query=请求子域名（原行为）；answer=应答记录（TXT 外泄）；both=两侧分别聚合
+  const side = (p.side || "query").toLowerCase();
+  const answerTypes = String(p.answerTypes || "txt").toLowerCase();
+  const aTypeSet = new Set(answerTypes.split(/[,;\s]+/).filter(Boolean));
+
+ // 收集 DNS 记录：query（含请求/响应两侧的 question）与应答记录（qr=1 的 answers）
   const queries = [];
+  const answerRecs = [];
   for (const d of res.dissected) {
     const l7 = d.layers && d.layers.l7;
     if (!l7 || l7.proto !== "DNS") continue;
-    if (!l7.questions || l7.questions.length === 0) continue;
-    for (const q of l7.questions) {
-      queries.push({ index: d.index, name: q.name, isResponse: !!l7.isResponse, qtype: q.qtypeName });
+    const qname0 = l7.questions && l7.questions.length ? l7.questions[0].name : "";
+    if (l7.questions && l7.questions.length) {
+      for (const q of l7.questions) {
+        queries.push({ index: d.index, name: q.name, isResponse: !!l7.isResponse, qtype: q.qtypeName });
+      }
+    }
+    if (l7.isResponse && l7.answers && l7.answers.length) {
+      for (const a of l7.answers) {
+        answerRecs.push({ index: d.index, txid: l7.id, qname: qname0, name: a.name, rtypeName: a.rtypeName, rtype: a.rtype, rdata: a.rdata });
+      }
     }
   }
-  if (queries.length === 0) return "未发现 DNS 查询。此流量中无 DNS（pcapParse 仅解析 UDP/53 DNS）。";
-
- // 优先只看请求，避免响应重复
-  let qset = queries.filter((q) => !q.isResponse);
-  if (qset.length === 0) qset = queries;
- // 按出现顺序、去重相邻重复
-  const seen = new Set();
-  const ordered = [];
-  for (const q of qset) {
-    const k = q.index + "|" + q.name;
-    if (seen.has(k)) continue; seen.add(k);
-    ordered.push(q);
-  }
+  if (queries.length === 0 && answerRecs.length === 0) return "未发现 DNS 查询。此流量中无 DNS（pcapParse 仅解析 UDP/53 DNS）。";
 
   const baseDomain = (p.baseDomain || "").trim().replace(/^\.+|\.+$/g, "").toLowerCase();
   const stripLabels = parseInt(p.stripLabels, 10);
@@ -653,52 +733,86 @@ function pcapDnsTunnelRun(text, p = {}) {
   }
 
   const lines = [];
-  lines.push("=== DNS 隧道检测（RFC 1035，子域名数据外泄）===");
-  lines.push(`DNS 查询数: ${queries.length}（唯一请求: ${ordered.length}）`);
+  lines.push("=== DNS 隧道检测（RFC 1035，子域名/应答记录数据外泄）===");
+  lines.push(`DNS 查询数: ${queries.length}  应答记录数: ${answerRecs.length}  side=${side}`);
   const baseInfo = baseDomain ? `已剥离基准域: ${baseDomain}` : `未指定基准域，默认剥离末尾 ${strip} 个标签（TLD+域名）。可用 baseDomain 精确指定`;
   lines.push(baseInfo);
   lines.push("");
 
- // 唯一子域名个数 / 平均长度 → 隧道启发式
-  const uniqNames = new Set(ordered.map((q) => q.name));
-  const avgLen = ordered.reduce((s, q) => s + q.name.length, 0) / (ordered.length || 1);
-  lines.push(`启发式: 唯一域名 ${uniqNames.size} 个，平均查询名长度 ${avgLen.toFixed(1)} 字符${avgLen > 40 || uniqNames.size > 20 ? "（偏高，疑似隧道）" : ""}`);
-  lines.push("");
+  const aggregates = []; // { sideLabel, aggregate, listLines }
+  const files = [];
 
- // 拼接所有数据标签
-  const allDataParts = [];
-  lines.push("--- 各查询提取的数据标签 ---");
-  const maxList = 60;
-  ordered.forEach((q, i) => {
-    const labels = extractData(q.name);
-    const joined = labels.join("");
-    allDataParts.push(joined);
-    if (i < maxList) lines.push(`[#${q.index}] ${q.name}  →  数据: ${joined || "(空)"}`);
-  });
-  if (ordered.length > maxList) lines.push(`… 省略 ${ordered.length - maxList} 条`);
-  lines.push("");
+ // ---- query 侧（保持原有口径：优先只看请求、按出现序去重相邻重复）----
+  if (side === "query" || side === "both") {
+    let qset = queries.filter((q) => !q.isResponse);
+    if (qset.length === 0) qset = queries;
+    const seen = new Set();
+    const ordered = [];
+    for (const q of qset) {
+      const k = q.index + "|" + q.name;
+      if (seen.has(k)) continue; seen.add(k);
+      ordered.push(q);
+    }
+    const uniqNames = new Set(ordered.map((q) => q.name));
+    const avgLen = ordered.reduce((s, q) => s + q.name.length, 0) / (ordered.length || 1);
+    lines.push(`[query 侧] 唯一域名 ${uniqNames.size} 个，平均查询名长度 ${avgLen.toFixed(1)} 字符${avgLen > 40 || uniqNames.size > 20 ? "（偏高，疑似隧道）" : ""}`);
+    const allDataParts = [];
+    const listLines = [];
+    const maxList = 60;
+    ordered.forEach((q, i) => {
+      const joined = extractData(q.name).join("");
+      allDataParts.push(joined);
+      if (i < maxList) listLines.push(`[#${q.index}] ${q.name}  →  数据: ${joined || "(空)"}`);
+    });
+    if (ordered.length > maxList) listLines.push(`… 省略 ${ordered.length - maxList} 条`);
+    aggregates.push({ sideLabel: "query", aggregate: allDataParts.join(""), listLines });
+  }
 
-  const aggregate = allDataParts.join("");
-  lines.push("--- 拼接数据流 ---");
-  lines.push(`拼接总长: ${aggregate.length} 字符`);
-  lines.push(aggregate.length > 512 ? aggregate.slice(0, 512) + " …" : aggregate);
-  lines.push("");
+ // ---- answer 侧（应答记录外泄，TXT 多串已在 pcapParse 按 RFC 1035 §3.3.14 拼接）----
+  if (side === "answer" || side === "both") {
+    const want = (r) => aTypeSet.has("all") || aTypeSet.has(String(r.rtypeName).toLowerCase()) || aTypeSet.has(String(r.rtype));
+    const sel = answerRecs.filter(want);
+    const parts = [];
+    const listLines = [];
+    sel.forEach((r, i) => {
+      parts.push(r.rdata);
+      if (i < 60) listLines.push(`[#${r.index}] txid=0x${r.txid.toString(16)} q=${r.qname || "?"} ${r.rtypeName} → ${r.rdata}`);
+    });
+    if (sel.length > 60) listLines.push(`… 省略 ${sel.length - 60} 条`);
+    lines.push(`[answer 侧] 匹配应答记录 ${sel.length} 条（answerTypes=${answerTypes}；A/AAAA 记录为点分文本，字节级外泄以 TXT/CNAME 为准）`);
+    aggregates.push({ sideLabel: "answer", aggregate: parts.join(""), listLines });
+  }
 
-  if (decodeMode !== "none" && aggregate.length > 0) {
-    lines.push(`--- 解码尝试（${decodeMode}）---`);
-    const attempts = tryDecodeData(aggregate, decodeMode);
-    if (attempts.length === 0) {
-      lines.push("（无有效解码结果）");
-    } else {
-      attempts.sort((a, b) => b.printableRatio - a.printableRatio);
-      for (const a of attempts) {
-        const flag = a.printableRatio > 0.85 ? "  ★可读" : "";
-        lines.push(`[${a.name}] ${a.bytes.length} 字节 (可打印率 ${(a.printableRatio * 100).toFixed(0)}%)${flag}`);
-        lines.push(`  ${a.ascii.length > 512 ? a.ascii.slice(0, 512) + " …" : a.ascii}`);
+  for (const ag of aggregates) {
+    lines.push("");
+    lines.push(`--- ${ag.sideLabel} 侧提取 ---`);
+    lines.push(...ag.listLines);
+    lines.push("");
+    lines.push(`--- ${ag.sideLabel} 侧拼接数据流 ---`);
+    lines.push(`拼接总长: ${ag.aggregate.length} 字符`);
+    lines.push(ag.aggregate.length > 512 ? ag.aggregate.slice(0, 512) + " …" : ag.aggregate);
+    if (ag.aggregate.length > 0) {
+      files.push({ name: `dns_${ag.sideLabel}_labels.txt`, mime: "text/plain", bytes: new TextEncoder().encode(ag.aggregate) });
+    }
+
+    if (decodeMode !== "none" && ag.aggregate.length > 0) {
+      lines.push("");
+      lines.push(`--- ${ag.sideLabel} 侧解码尝试（${decodeMode}）---`);
+      const attempts = tryDecodeData(ag.aggregate, decodeMode);
+      if (attempts.length === 0) {
+        lines.push("（无有效解码结果）");
+      } else {
+        attempts.sort((a, b) => b.printableRatio - a.printableRatio);
+        for (const a of attempts) {
+          const flag = a.printableRatio > 0.85 ? "  ★可读" : "";
+          lines.push(`[${a.name}] ${a.bytes.length} 字节 (可打印率 ${(a.printableRatio * 100).toFixed(0)}%)${flag}`);
+          lines.push(`  ${a.ascii.length > 512 ? a.ascii.slice(0, 512) + " …" : a.ascii}`);
+          files.push({ name: `dns_${ag.sideLabel}_${a.name}.bin`, mime: "application/octet-stream", bytes: a.bytes });
+        }
       }
     }
   }
-  return lines.join("\n");
+  return files.length ? { text: lines.join("\n"), files } : lines.join("\n");
 }
 
 // ============================================================
@@ -760,10 +874,142 @@ function pcapIcmpPayloadRun(text, p = {}) {
     lines.push("[ASCII]");
     lines.push(asciiPreview(combined, 0, Math.min(combined.length, preview)) + (combined.length > preview ? " …" : ""));
   }
+ // 产物协议：拼接载荷原字节下载（完整字节，不受上面预览截断影响）
+  if (combined.length > 0) {
+    return { text: lines.join("\n"), files: [{ name: `icmp_${filter}.bin`, mime: "application/octet-stream", bytes: combined }] };
+  }
   return lines.join("\n");
 }
 
 // ============================================================
+// 字段提取/过滤：ip.id / TTL / TCP urgent pointer / DNS qry-answer 逐包字段。
+// 输出 table（人读）/ tsv（机器对拍）/ values（纯值；单字段 TTL 列可直接喂 ttlStego 解码）。
+// 方向过滤表达式：src:X / dst:X / sport=N / dport=N / port=N / 裸数字=端口 / 裸文本=IP 任一侧包含；逗号分隔多条件 AND。
+// ============================================================
+const PCAP_FIELD_CATALOG = [
+  "frame.ts", "frame.len", "ip.src", "ip.dst", "ip.proto",
+  "ip.id", "ip.id.hex", "ip.ttl", "ip.flags", "ip.frag_off",
+  "tcp.sport", "tcp.dport", "tcp.seq", "tcp.ack", "tcp.flags", "tcp.window", "tcp.urgptr",
+  "udp.sport", "udp.dport", "udp.len",
+  "icmp.type", "icmp.code", "icmp.id", "icmp.seq",
+  "dns.id", "dns.id.hex", "dns.qry.name", "dns.qry.type", "dns.answers", "dns.txt",
+];
+const PCAP_FIELD_GETTERS = {
+  "frame.ts": (c) => c.d.ts,
+  "frame.len": (c) => String(c.d.length),
+  "ip.src": (c) => (c.l3 && c.l3.src) || "",
+  "ip.dst": (c) => (c.l3 && c.l3.dst) || "",
+  "ip.proto": (c) => (c.l3 && c.l3.protocolName) || "",
+  "ip.id": (c) => (c.l3 && c.l3.type === "IPv4" && c.l3.id != null) ? String(c.l3.id) : "",
+  "ip.id.hex": (c) => (c.l3 && c.l3.type === "IPv4" && c.l3.id != null) ? "0x" + c.l3.id.toString(16).padStart(4, "0") : "",
+  "ip.ttl": (c) => (c.l3 && c.l3.type === "IPv4" && c.l3.ttl != null) ? String(c.l3.ttl) : "",
+  "ip.flags": (c) => (c.l3 && c.l3.type === "IPv4" && c.l3.flags != null) ? String(c.l3.flags) : "",
+  "ip.frag_off": (c) => (c.l3 && c.l3.type === "IPv4" && c.l3.fragOff != null) ? String(c.l3.fragOff) : "",
+  "tcp.sport": (c) => c.tcp ? String(c.tcp.srcPort) : "",
+  "tcp.dport": (c) => c.tcp ? String(c.tcp.dstPort) : "",
+  "tcp.seq": (c) => c.tcp ? String(c.tcp.seq) : "",
+  "tcp.ack": (c) => c.tcp ? String(c.tcp.ack) : "",
+  "tcp.flags": (c) => c.tcp ? c.tcp.flagStr : "",
+  "tcp.window": (c) => c.tcp ? String(c.tcp.window) : "",
+  "tcp.urgptr": (c) => (c.tcp && c.tcp.urgentPointer != null) ? String(c.tcp.urgentPointer) : "",
+  "udp.sport": (c) => c.udp ? String(c.udp.srcPort) : "",
+  "udp.dport": (c) => c.udp ? String(c.udp.dstPort) : "",
+  "udp.len": (c) => c.udp ? String(c.udp.length) : "",
+  "icmp.type": (c) => c.ic ? String(c.ic.type) : "",
+  "icmp.code": (c) => c.ic ? String(c.ic.code) : "",
+  "icmp.id": (c) => c.ic ? String(c.ic.id) : "",
+  "icmp.seq": (c) => c.ic ? String(c.ic.seq) : "",
+  "dns.id": (c) => c.dns ? String(c.dns.id) : "",
+  "dns.id.hex": (c) => c.dns ? "0x" + c.dns.id.toString(16).padStart(4, "0") : "",
+  "dns.qry.name": (c) => c.dns && c.dns.questions.length ? c.dns.questions.map((q) => q.name).join("; ") : "",
+  "dns.qry.type": (c) => c.dns && c.dns.questions.length ? c.dns.questions.map((q) => q.qtypeName).join("; ") : "",
+  "dns.answers": (c) => c.dns && c.dns.answers.length ? c.dns.answers.map((a) => `${a.name} ${a.rtypeName} ${a.rdata}`).join("; ") : "",
+  "dns.txt": (c) => c.dns && c.dns.answers.length ? c.dns.answers.filter((a) => a.rtype === 16).map((a) => a.rdata).join("; ") : "",
+};
+
+function pcapPassDir(c, exprs) {
+  for (const raw of exprs) {
+    const e = raw.trim();
+    if (!e) continue;
+    const l3 = c.l3, l4 = c.l4;
+    let ok = false;
+    const m = e.match(/^(src|dst):(.+)$/i);
+    if (m) {
+      const ip = m[1].toLowerCase() === "src" ? (l3 && l3.src) : (l3 && l3.dst);
+      ok = !!ip && String(ip).includes(m[2]);
+    } else if (/^(sport|dport|port)=(\d+)$/i.test(e)) {
+      const mm = e.match(/^(sport|dport|port)=(\d+)$/i);
+      const v = parseInt(mm[2], 10);
+      const sp = l4 && l4.srcPort, dp = l4 && l4.dstPort;
+      const kw = mm[1].toLowerCase();
+      ok = kw === "sport" ? sp === v : kw === "dport" ? dp === v : (sp === v || dp === v);
+    } else if (/^\d+$/.test(e)) {
+      const v = parseInt(e, 10);
+      ok = !!(l4 && (l4.srcPort === v || l4.dstPort === v));
+    } else {
+      ok = !!((l3 && String(l3.src || "").includes(e)) || (l3 && String(l3.dst || "").includes(e)));
+    }
+    if (!ok) return false;
+  }
+  return true;
+}
+
+function pcapFieldExtractRun(text, p = {}) {
+  const res = decodePcap(text, p.inputEnc, p);
+  if (res.error) return res.error;
+  const fields = String(p.fields || "ip.id,ip.ttl,tcp.urgptr,dns.id,dns.qry.name").split(/[\s,]+/).filter(Boolean);
+  const unknown = fields.filter((f) => !PCAP_FIELD_CATALOG.includes(f));
+  if (unknown.length) return `未知字段: ${unknown.join(", ")}。可用字段：${PCAP_FIELD_CATALOG.join(", ")}`;
+  const protoF = (p.proto || "all").toLowerCase();
+  const dirExprs = String(p.dirFilter || "").split(/[\s,]+/).filter(Boolean);
+  const outMode = (p.out || "table").toLowerCase();
+
+  const rows = [];
+  for (const d of res.dissected) {
+    const l3 = d.layers && d.layers.l3;
+    const l4 = d.layers && d.layers.l4;
+    const l7 = d.layers && d.layers.l7;
+    const c = {
+      d, l3, l4,
+      tcp: l4 && l4.type === "TCP" ? l4 : null,
+      udp: l4 && l4.type === "UDP" ? l4 : null,
+      dns: l7 && l7.proto === "DNS" ? l7 : null,
+      ic: null,
+    };
+    if (l4 && l4.type === "ICMP" && l3 && l3.payload && l3.payload.length >= 8) {
+      const b = l3.payload; // dissectICMP 未暴露 echo id/seq，头内重读（与 pcapIcmpPayloadRun 同法）
+      c.ic = { type: b[0], code: b[1], id: u16be(b, 4), seq: u16be(b, 6) };
+    }
+    if (protoF !== "all") {
+      if (protoF === "dns") { if (!c.dns) continue; }
+      else if (!l4 || String(l4.type).toLowerCase() !== protoF) continue;
+    }
+    if (dirExprs.length && !pcapPassDir(c, dirExprs)) continue;
+    rows.push(c);
+  }
+
+  const get = (c, f) => { try { const v = PCAP_FIELD_GETTERS[f](c); return v == null ? "" : String(v); } catch { return ""; } };
+  const lines = [];
+  if (outMode === "table") {
+    lines.push("=== pcap 字段提取/过滤===");
+    lines.push(`匹配包数: ${rows.length} / ${res.dissected.length}  proto=${protoF}  fields=${fields.join(",")}${dirExprs.length ? "  dir=" + dirExprs.join(",") : ""}`);
+    lines.push("");
+    lines.push(["#", "ts", "src→dst", ...fields].join("\t"));
+    for (const c of rows) {
+      const ep = c.l4 ? `${c.l3 ? c.l3.src : "?"}:${c.l4.srcPort}→${c.l3 ? c.l3.dst : "?"}:${c.l4.dstPort}` : (c.l3 ? `${c.l3.src}→${c.l3.dst}` : "?");
+      lines.push([c.d.index, c.d.ts, ep, ...fields.map((f) => get(c, f))].join("\t"));
+    }
+  } else if (outMode === "tsv") {
+    lines.push(["#", ...fields].join("\t"));
+    for (const c of rows) lines.push([c.d.index, ...fields.map((f) => get(c, f))].join("\t"));
+  } else {
+    for (const c of rows) lines.push(fields.map((f) => get(c, f)).join("\t"));
+  }
+  return lines.join("\n");
+}
+
+// ============================================================
+// 文件拖入自动分析：analyzePcapBytes(bytes) → sections[]// ============================================================
 // 文件拖入自动分析：analyzePcapBytes(bytes) → sections[]
 // 拖入 pcap/pcapng 时由 fileAnalysis.js 调用，一键跑完 4 项协议级分析
 // （TCP 重组 / HTTP 提取 / DNS 隧道 / ICMP 载荷），免去用户手动逐个 op 跑。
@@ -831,6 +1077,8 @@ export function analyzePcapBytes(bytes) {
     } catch (e) {
       text = "分析异常: " + (e && e.message ? e.message : String(e));
     }
+ // 产物对象解包（拖入自动分析不渲染下载按钮，只取 text；files 丢弃是有意为之）
+    if (text && typeof text === "object") text = typeof text.text === "string" ? text.text : "";
     if (typeof text !== "string" || !text.trim()) continue;
     // 无数据结果跳过（短文本才跳，长文本可能有诊断价值保留）
     if (a.skipKw.some((kw) => text.includes(kw)) && text.length < 80) continue;
@@ -891,6 +1139,10 @@ register({
     { key: "inputEnc", label: "输入编码", type: "select", default: "hex", options: [
       { value: "hex", label: "Hex 十六进制" }, { value: "base64", label: "Base64" }, { value: "auto", label: "自动识别" },
     ] },
+    { key: "side", label: "数据侧", type: "select", default: "query", options: [
+      { value: "query", label: "请求子域名（原行为）" }, { value: "answer", label: "应答记录（TXT 外泄）" }, { value: "both", label: "两侧分别聚合" },
+    ] },
+    { key: "answerTypes", label: "应答记录类型", type: "text", default: "txt", placeholder: "txt / cname / a / aaaa / all，逗号分隔" },
     { key: "baseDomain", label: "基准域名（如 evil.com，用于剥离）", type: "text", default: "", placeholder: "留空则默认剥离末尾 N 个标签" },
     { key: "stripLabels", label: "默认剥离末尾标签数", type: "number", default: 2 },
     { key: "decodeAs", label: "解码方式", type: "select", default: "auto", options: [
@@ -916,5 +1168,27 @@ register({
     { key: "previewBytes", label: "ASCII 预览字节", type: "number", default: 400 },
   ],
   run: pcapIcmpPayloadRun,
+  acceptsBytes: true,
+});
+
+register({
+  id: "pcapFieldExtract", family: "pcap", familyLabel: "fields",
+  cat: "forensic",
+  name: "pcap 字段提取/过滤",
+  desc: "逐包提取 ip.id / TTL / TCP urgent pointer / DNS qry-answer 等字段，支持协议与方向过滤（src:/dst:/port=），输出表格/TSV/纯值三档（纯值 TTL 列可直接接 TTL 隐写解码）",
+  params: [
+    { key: "inputEnc", label: "输入编码", type: "select", default: "hex", options: [
+      { value: "hex", label: "Hex 十六进制" }, { value: "base64", label: "Base64" }, { value: "auto", label: "自动识别" },
+    ] },
+    { key: "fields", label: "字段（逗号分隔）", type: "text", default: "ip.id,ip.ttl,tcp.urgptr,dns.id,dns.qry.name", placeholder: "目录见描述：ip.id ip.ttl tcp.urgptr dns.qry.name dns.txt icmp.seq ..." },
+    { key: "proto", label: "协议过滤", type: "select", default: "all", options: [
+      { value: "all", label: "全部" }, { value: "tcp", label: "TCP" }, { value: "udp", label: "UDP" }, { value: "icmp", label: "ICMP" }, { value: "dns", label: "DNS" },
+    ] },
+    { key: "dirFilter", label: "方向过滤（逗号分隔，AND）", type: "text", default: "", placeholder: "src:10.0.0.1 / dst:53 / port=53 / 10.0.0.1" },
+    { key: "out", label: "输出格式", type: "select", default: "table", options: [
+      { value: "table", label: "表格（人读）" }, { value: "tsv", label: "TSV（机器对拍）" }, { value: "values", label: "纯值（逐行）" },
+    ] },
+  ],
+  run: pcapFieldExtractRun,
   acceptsBytes: true,
 });

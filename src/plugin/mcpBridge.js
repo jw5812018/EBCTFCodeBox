@@ -137,7 +137,7 @@ export const MCP_TOOLS = [
       type: "object",
       properties: {
         input: { type: "string", description: "疑似被编码的文本" },
-        crib: { type: "string", description: "已知明文片段/正则用于命中加权（可选，如 flag\\{）" },
+        crib: { type: "string", description: "已知明文字面片段用于命中加权（可选，如 flag{；不执行正则）" },
         maxDepth: { type: "number", description: "最大解码层数（可选，默认 1；多层链式解码传 3）" },
         intensive: { type: "boolean", description: "是否开 1-byte XOR + 位旋转暴力（可选，默认 false）" },
       },
@@ -268,7 +268,7 @@ const GUIDE_TEXT = `# 用恒烈CTF编码工具箱解题的推荐流程
 
 ## 2. 一键智能解码（最省事，优先试）
 调 \`ebctf_magic_decode\`，传 input=密文。它会自动尝试多种编码并按可能性排序返回候选明文与解码链路。
-- 知道 flag 前缀时传 \`crib\`（如 \`flag\\{\`）加权命中，结果更准。
+- 知道 flag 前缀时传 \`crib\`（如 \`flag{\`）按字面加权，不执行正则。
 - 怀疑是多层套娃（base 套 base、编码套编码）时传 \`maxDepth: 3\` 开多层链式解码。
 - 怀疑单字节 XOR / 位旋转时传 \`intensive: true\` 开暴力（较慢，非必要不开）。
 

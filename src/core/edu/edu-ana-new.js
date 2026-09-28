@@ -112,12 +112,29 @@ export default {
       { tex: "\\text{key}_{i+1} = \\text{CRC32}(\\text{key}_i,\\ \\text{byte})", caption: "ZipCrypto 密钥更新（CRC32 表驱动）" },
     ],
     tips: [
-      "CTF misc 高频题：给一个加密 ZIP，密码是弱口令（数字、常见词），穷举即可",
+      "本工具只做弱口令小字典/短数字掩码快速验证，不做大规模爆破——请先用本箱 zip2john 提取 hash 串，再喂 John the Ripper（https://www.openwall.com/john）或 hashcat（-m 13600 / -m 17200-17230，https://hashcat.net）",
       "仅支持 ZipCrypto（传统加密），WinZip AES 加密的 ZIP 需其他工具",
-      "数字 6 位 = 100 万次，浏览器同步约 10-30 秒；6 位以上请用 hashcat 的 --hash-type 17200/17210/17220/17225/17230",
-      "bkcrack 明文攻击（已知 ZIP 内某个文件的内容）可还原密钥绕过密码，本工具不做",
+      "数字 6 位 = 100 万次，浏览器同步约 10-30 秒，再往上就超出浏览器能力了",
+      "bkcrack 明文攻击（已知 ZIP 内某个文件的内容）可还原密钥绕过密码，见本箱 bkcrack 工具",
       "密码验证只看 12 字节加密头，理论上有 1/256 误判率，命中后建议再解压验证",
     ],
     aka: ["zip password crack", "zipcrypto brute", "zip 弱口令", "zip 密码爆破", "zip爆破", "zip密码破解", "ZipCrypto crack", "zip字典爆破", "压缩包密码爆破", "zip brute force", "PKWARE加密破解", "zip口令爆破"],
+  },
+  huffmanCodec: {
+    what: "哈夫曼编解码：按符号出现频率给变长码（高频短码、低频长码）的无损压缩。提供「频率档」（输入统计或权重表 → 确定性 canonical 码）与「码表档」（直接给符号→码字表）两种模式，双向。",
+    principle:
+      "两步：① 建树——把符号按频率放进小顶堆，每次取最小的两个合并，直到只剩一棵树；本工具把顺序规则钉死（堆键=频率+最小字节值，码字按 canonical 规则分配），保证同样输入两端得到同一张码表。② 编码——逐符号查表拼 01 串，按 MSB-first 打包成字节，bitLen 记真实位数。解码就是沿码表逐位匹配。前缀无关性（任何码字不是别的码字前缀）保证解码唯一。",
+    usage: "编码：选模式（频率档可填权重表，空=从输入统计），粘文本 → 得码表+hex+bitLen。解码：粘 hex、填 bitLen、提供同一张权重表或码表 → 还原文本。",
+    examples: [
+      { in: "ABRACADABRA（频率档，统计口径）", out: "A=0, R=10, B=110, C=1110, D=1111（canonical），23 bit → hex 69cf68，bitLen=23", desc: "经典示例：5 个符号频率 5/2/2/1/1" },
+      { in: "码表档：a 0 / b 110 / c 111 / d 10 + 输入 abdacdbcdabcd", out: "29 bit 位流（hex 69ede6f0），解码还原原文", desc: "用户码表不必是 canonical，前缀无关即可" },
+    ],
+    tips: [
+      "频率档解码必须提供与编码一致的权重表（或同一份原文重新统计），否则重建出的码表不同会解出乱码/报截断。",
+      "「# 开头行」在权重表/码表里是注释；符号 # 本身要写 \"#\" 或 \\x23。",
+      "权重表支持 \\xNN/0xNN 写任意字节符号，中文按 UTF-8 拆成多字节符号。",
+      "位流产物是 hex + bitLen 两个独立值——本工具不定义私有容器格式，需要落盘就自己拼。",
+    ],
+    aka: ["哈夫曼", "huffman", "哈夫曼编码", "huffman coding", "哈夫曼压缩", "huffman encode", "哈夫曼解码", "huffman decode", "赫夫曼编码", "霍夫曼", "canonical huffman", "规范哈夫曼", "哈夫曼码表", "huffman table", "前缀码", "prefix code"],
   },
 };

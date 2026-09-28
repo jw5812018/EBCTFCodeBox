@@ -145,7 +145,7 @@ function evalProgExpr(src, opts = {}) {
   const width = opts.width === undefined || opts.width === null || opts.width === ""
     ? 32
     : Number(opts.width);
-  // 字宽：常用 8/16/32/64 之外还收**任意位宽** 1–512（MT81 恒烈点名「几个 bit」——
+  // 字宽：常用 8/16/32/64 之外还收**任意位宽** 1–512（MT81 产品裁决「几个 bit」——
   // 逆向里 12 位地址总线、位域、24 位色深都不是 2 的幂）。op 的下拉仍只给四档，
   // 这里放宽的是纯函数入口，向后兼容。
   if (!Number.isInteger(width) || width < 1 || width > 512) {

@@ -512,7 +512,8 @@ function romanEncode(n) {
 }
 function romanDecode(s) {
   s = String(s).trim().toUpperCase();
-  if (!/^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/.test(s)) {
+ // 正则各组均可选，空串会"通过"；罗马数字有效域 1-3999，空串无对应值 → 显式拒绝
+  if (!s || !/^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/.test(s)) {
     throw new Error("roman: 非法罗马数字 " + s);
   }
   let n = 0, i = 0;

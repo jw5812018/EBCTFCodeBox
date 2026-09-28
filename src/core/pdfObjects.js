@@ -1,5 +1,5 @@
 /*
- * pdfObjects.js — PDF 对象与流解析（P1 批，cat:'forensic'，单向 run）。
+ * pdfObjects.js — PDF 对象与流解析（P1 批，cat:'filefmt'，单向 run）。
  *
  * 解决什么：PDF 取证起手动作——不渲染页面、不修文件，直接把对象表挖出来：
  * 每个「N M obj ... endobj」对象的编号 / 文件偏移 / 体长 / Type / Subtype /
@@ -418,7 +418,7 @@ export function makePdf(entries) {
 // ============ register ============
 
 register({
-  id: "pdfObjects", cat: "forensic", name: "PDF 对象解析",
+  id: "pdfObjects", cat: "filefmt", name: "PDF 对象解析",
   desc: "挖出 PDF 对象表：编号/偏移/长度/Type/Subtype/Filter/流长度逐对象列出，FlateDecode 流自动 zlib 解压并预览（页面内容流/隐藏文本/压缩 flag 藏身处）。词法容错扫描，xref 损坏、前置垃圾拼接、缺 endobj 截断件都能解",
   params: [
     { key: "inputEnc", label: "输入编码（文本输入时）", type: "select", default: "auto",

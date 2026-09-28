@@ -1,7 +1,7 @@
 /*
  * edu-bridge-new.en.js — English edu shard for the local-bridge / exe bridging ops (pure data, no side effects).
  *
- * Covers 15 bridging ops that "call a local exe / launch a local GUI". These ops are essentially wrappers around external tools:
+ * Covers 14 bridging ops that "call a local exe / launch a local GUI". These ops are essentially wrappers around external tools:
  * - GUI type (*Launch): only call the bridge /api/launch to spin up a local exe; the user operates manually in the pop-up window.
  *   The toolbox does not feed input or fetch results on your behalf.
  * - CLI type (*Bridge / *Exe): call the bridge /api/run for unattended execution, with files passed in via {placeholder}.
@@ -14,33 +14,6 @@ export default {
  // ============================================================
  // GUI launchers (bridgeStego)
  // ============================================================
-  watermarkhLaunch: {
-    what: "A button that launches the local watermarkH image-watermark steganography tool (a 52pojie release).",
-    principle:
-      "watermarkH is a Chinese GUI steganography tool that hides text/images as a watermark inside a carrier image, or extracts watermarks from an image; " +
-      "it circulates on the 52pojie (Kanxue/wuaipojie) forum and is common in CTF image-misc challenges.\n\n" +
-      "This op does no image processing: it only spins up the local watermarkH.exe via the local bridge's /api/launch endpoint, " +
-      "and the actual hide/extract operations all happen manually in the pop-up program window.",
-    usage:
-      "Windows only. First run python bridge.py locally (listening on localhost:8181), refresh this page, then click this feature to launch the watermarkH window. " +
-      "This is a pure GUI launcher: the toolbox does not receive input or return results — do all steganography operations manually in the pop-up watermarkH window.",
-    examples: [
-      {
-        in: "（no input, just click）",
-        out: "● Launched local exe: watermarkH · watermark\nPath: ...\nPlease operate manually in the pop-up program window.",
-        desc: "After clicking, the bridge spins up watermarkH.exe; everything else is done in the native window.",
-      },
-    ],
-    tips: [
-      "When you get a suspicious image, try it first to check for a hidden watermark — many Chinese misc challenges rely on it.",
-      "If the bridge isn't running it returns \"local bridge not ready\"; first confirm python bridge.py is running and that you're on Windows.",
-    ],
-    aka: [
-      "watermarkH", "watermark", "图像水印", "图片水印", "水印隐写", "吾爱破解", "52pojie",
-      "图片隐写", "watermarkH.exe", "image watermark", "steganography", "misc 隐写",
-    ],
-  },
-
   jphswinLaunch: {
     what: "Launches the local JPHS for Windows (jphide/jpseek) to hide data in a JPEG or extract it.",
     principle:

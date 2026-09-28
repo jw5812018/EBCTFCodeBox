@@ -332,7 +332,7 @@ function formatSniff(text) {
 // ============ 注册 ============
 register({
   id: "formatSniff",
-  cat: "forensic",
+  cat: "analysis",
   name: "格式嗅探",
   desc: "识别输入的格式/特征（JWT/URL/PEM/哈希/编码/密钥/坐标/时间戳等），给 CTF 惊喜提示",
   params: [],

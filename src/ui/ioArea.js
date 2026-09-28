@@ -41,31 +41,44 @@ export function ioArea(attrs = {}) {
     configurable: true,
   });
   if (!ro) {
- // 粘贴净化：只取纯文本，杜绝富文本/HTML 注入
+ // 粘贴净化：只取纯文本，杜绝富文本/HTML 注入。
+ // 不用 execCommand("insertText")：Chromium 会吞 \n（多行矩阵被拍平成单行）且返回 true，
+ // 兜底分支永不触发。改为 Range 直插文本节点（.io-area 为 pre-wrap，\n 语义正确），
+ // 并手动补发 input 事件（程序化 DOM 变更不触发原生 input，上层状态同步依赖它）。
     div.addEventListener("paste", (e) => {
       e.preventDefault();
       const cd = e.clipboardData || window.clipboardData;
       const text = cd ? cd.getData("text/plain") : "";
-      if (!document.execCommand || !document.execCommand("insertText", false, text)) {
+      if (!text) return;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const node = document.createTextNode(text);
+        range.insertNode(node);
+        range.setStartAfter(node); range.collapse(true);
+        sel.removeAllRanges(); sel.addRange(range);
+      } else {
+        div.textContent = div.textContent + text;
+      }
+      div.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+ // Enter → 纯 "\n"（不让浏览器插入 <div>/<br>，保证 textContent 换行语义正确）。
+ // Ctrl/Meta+Enter 放行给上层的 convert 快捷键；Shift+Enter 也走纯换行。
+ // 同粘贴：execCommand("insertText", "\n") 在 Chromium 吞换行 → Range 直插 + 补发 input。
+    div.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
         const sel = window.getSelection();
         if (sel && sel.rangeCount) {
           const range = sel.getRangeAt(0);
           range.deleteContents();
-          const node = document.createTextNode(text);
+          const node = document.createTextNode("\n");
           range.insertNode(node);
           range.setStartAfter(node); range.collapse(true);
           sel.removeAllRanges(); sel.addRange(range);
-        } else {
-          div.textContent = div.textContent + text;
+          div.dispatchEvent(new InputEvent("input", { bubbles: true }));
         }
-      }
-    });
- // Enter → 纯 "\n"（不让浏览器插入 <div>/<br>，保证 textContent 换行语义正确）。
- // Ctrl/Meta+Enter 放行给上层的 convert 快捷键；Shift+Enter 也走纯换行。
-    div.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        document.execCommand && document.execCommand("insertText", false, "\n");
       }
     });
  // 保险：内容删空后清掉浏览器残留的 <br>，让 :empty placeholder 重新生效

@@ -44,8 +44,12 @@ export const LOCALE_META = {
   "mn-Mong": { name: "蒙古语 ᠮᠣᠩᠭᠣᠯ ᠪᠢᠴᠢᠭ", dir: "ltr" },  // 传统蒙文（人民币式横排）
 };
 
-// 已加载字典：zh/en 静态在册，其余切到时按需 import 填入。
-const DICTS = { zh, en };
+// 已加载字典：zh/en 静态在册（合并 desc_supplement 高频 op 描述补充表——
+// MT596 修复：此前 supplement 文件无任何消费方，整批 op.*.desc 键是死键），
+// 其余切到时按需 import 填入。
+import supZh from "./desc_supplement_zh.js";
+import supEn from "./desc_supplement_en.js";
+const DICTS = { zh: { ...zh, ...supZh }, en: { ...en, ...supEn } };
 // 语言文件在途 import 承诺缓存（防同一语言并发重复拉取）。
 const _loading = {};
 const STORE_KEY = "ebctf_locale";
@@ -78,7 +82,7 @@ function syncHtmlLangDir() {
 syncHtmlLangDir();
 
 /*
- * ---- 中国境内民族语言：以中文为基底（恒烈明令，MT86）----
+ * ---- 中国境内民族语言：以中文为基底（产品负责人明令，MT86）----
  *
  * 这四门语言的现代科技术语，借词来源是**汉语**而不是英语。未翻译的条目回退英文会造成
  * 「藏文界面里冒出一串英文」的割裂感；回退中文则符合这些语言的实际使用习惯（本族语法框架 +
@@ -152,11 +156,17 @@ export function locales() {
 /**
  * 切换语言：按需加载语言包 → 写 localStorage → 同步 <html lang/dir> → 触发订阅重渲染。
  * async：懒加载语言需 await；UI 切换处 await 后界面才带新文案重绘。
+ * 竞态：每次合法选择递增意图序号；await 后仅最新意图可提交，旧的慢加载结果被丢弃。
+ * 「重新选择当前语言」也递增序号以取消在途旧意图，但自身不改状态、不等待。
  */
+let _localeIntent = 0;
 export async function setLocale(loc) {
-  if (!LOCALE_META[loc] || loc === _locale) return;
+  if (!LOCALE_META[loc]) return;
+  const intent = ++_localeIntent;
+  if (loc === _locale) return; // 重新选择当前语言：取消待生效旧意图，保持现状
   const dict = await ensureLoaded(loc);
   if (!dict) return; // 加载失败保持原语言，不切到空表
+  if (intent !== _localeIntent) return; // await 后仅最新选择可提交
   _locale = loc;
   try { localStorage.setItem(STORE_KEY, loc); } catch { /* 忽略 */ }
   syncHtmlLangDir();

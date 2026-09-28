@@ -1,5 +1,5 @@
 /*
- * dtmfWav.js — DTMF 双音多频 WAV 合成 / 解码（cat:'stego'）。
+ * dtmfWav.js — DTMF 双音多频 WAV 合成 / 解码（cat:'audio'）。
  *
  * 按键序列 ↔ 音频。
  * encode: 按键序列（0-9 A-D * #）→ 叠加行/列两正弦 → 16 位单声道 WAV → base64
@@ -192,8 +192,44 @@ function goertzel(sig, start, len, freq, sr) {
 }
 
 // ---- 解码：WAV → 按键序列 ----
+//
+// 判据分三道闸（缺一道就会把底噪当按键 —— 见「绝对电平门限」一节）：
+//   ① 双频能量占比 rel = (行最强 + 列最强) / 窗总能量 ≥ thr（默认 0.15，调用方可调）
+//      —— ITU-T Q.23 的 DTMF 是一对正弦叠加，纯音窗的 rel ≈ 1，故该比值即「像不像双音」。
+//   ② 频率独占性：行次强 / 行最强 ≤ maxRel 且 列次强 / 列最强 ≤ maxRel（默认 0.2，约 14 dB）
+//      —— 底噪在被测频点上也会有能量，但不会出现「某一行频独占」。纯音窗实测该比值 < 0.05，
+//         底噪窗实测 0.1~1.0，故 0.2 这条线能一刀切开，且不依赖录音增益。
+//   ③ 绝对电平门限：窗能量 ≥ 本段最强有效窗能量 × absFrac（默认 0.3）
+//      —— 全局归一：真按键通常比底噪高一个量级，门限按「本文件自己的按键电平」定，
+//         不写死绝对幅度，故对任意录音增益都成立。
+//   ④ 最短按键时长 minKeyMs（默认 30 ms）——单窗/双窗的瞬时命中判为毛刺，不得成键。
+//      ITU-T Q.23 规定按键最短 40 ms，30 ms 是留有余量的下界。
+//   ⑤ 同键空隙自适应合并（本 op 唯一的「一分为二」防线）
+//      ——真录音里同一个按键内部可能带瞬时凹陷（本素材 dtmf拨号音.wav 的 3 键在 5.64 s、
+//        5 键在 6.22 s 各有一段 60~85 ms 的掉电平），若一律按「新键」处理，5 个键会被切成 7 个。
+//      判据：空隙 ms ≤ min(mergeGapMs, 本文件键间静音中位数 / 2)。
+//        ① 为什么除以 2：同一台设备/同一段录音里，真键间隔是稳定的（本素材实测 275~370 ms），
+//           而同键内凹陷只有 60~85 ms，相差近 4 倍；「明显短于本文件自己的键间静音」才可能是凹陷。
+//           长窗（100 ms）对照证实凹陷期间行/列主导频道不变（3 仍是 697/1477，5 仍是 770/1336），
+//           即频率对没变、只是幅度掉了，故物理上是同一键。
+//        ② 为什么不用绝对毫秒阈值：真重复键（编码器 tone=200 ms/gap=60 ms 的 "555"）空隙 60 ms
+//           与凹陷 60~85 ms 重叠，任何绝对阈值都会二选一地误判；只有相对量能同时成立。
+//        ③ 键间静音中位数取「相邻两段按键键名不同」的那些空隙（无歧义的真键间隔）；
+//           若整段只有同一个键（如 "555"），退化为全部空隙的中位数 —— 此时它正是真键间隔，判据仍成立。
+// 五道闸中 ②③④⑤ 是本轮修复新增：修复前只有 ①，于是一段 0.7 s 的底噪（能量仅为真按键的
+// 三成、无双频独占）被逐窗判成 9 个键，真键 5 个被淹没 —— 「假 flag」由此而来。
 function dtmfDecode(text, p) {
-  const thr = clamp(Number((p && p.threshold) || 0.15), 0.01, 0.9);
+ // 参数读取：0 对 absFrac/minKeyMs/mergeGapMs 是合法值（关闭/不合并/不去毛刺），
+ // 故不能用 `(p && p.x) || 默认值`（会把 0 悄悄换成默认值），改用显式判空。
+  const pnum = (key, def) => {
+    const v = p && p[key];
+    return (v === undefined || v === null || v === "") ? def : Number(v);
+  };
+  const thr = clamp(pnum("threshold", 0.15), 0.01, 0.9);
+  const maxRel = clamp(pnum("maxRel", 0.2), 0.01, 1);
+  const absFrac = clamp(pnum("absFrac", 0.3), 0, 1);
+  const minKeyMs = clamp(pnum("minKeyMs", 30), 0, 1000);
+  const mergeGapMs = clamp(pnum("mergeGapMs", 200), 0, 1000);
  // 拖入文件走 rawBytes 通道（acceptsBytes 约定）：decode 向直接用真 WAV 字节，跳过 hex/base64 文本解析。
   const wavBytes = (p && p.rawBytes && p.rawBytes.length)
     ? (p.rawBytes instanceof Uint8Array ? p.rawBytes : new Uint8Array(p.rawBytes))
@@ -205,31 +241,59 @@ function dtmfDecode(text, p) {
   const hop = Math.max(1, Math.floor(win / 2));
   const N = sig.length;
 
- // 逐窗判音，得每窗按键（或 null）
-  const frameKeys = [];
+ // 第一遍：逐窗算能量与 8 频能量，过 ①② 的窗记为候选
+  const frames = [];
+  let peak = 0;
   for (let start = 0; start + win <= N; start += hop) {
- // 窗内总能量做归一
     let energy = 0;
     for (let n = 0; n < win; n++) energy += sig[start + n] * sig[start + n];
-    if (energy < 1e-6) { frameKeys.push(null); continue; }
- // 8 频能量
+    if (energy < 1e-6) { frames.push(null); continue; }
     const e = ALL_FREQ.map((fq) => goertzel(sig, start, win, fq, sr));
- // 行/列各取最大
-    let rMax = -1, rIdx = -1, cMax = -1, cIdx = -1;
-    for (let i = 0; i < 4; i++) { if (e[i] > rMax) { rMax = e[i]; rIdx = i; } }
-    for (let i = 0; i < 4; i++) { if (e[4 + i] > cMax) { cMax = e[4 + i]; cIdx = i; } }
-    const rel = (rMax + cMax) / (energy * win);
-    if (rel < thr) { frameKeys.push(null); continue; }
-    frameKeys.push(KEYS[rIdx][cIdx]);
+    const r = [e[0], e[1], e[2], e[3]].map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+    const c = [e[4], e[5], e[6], e[7]].map((v, i) => [v, i]).sort((a, b) => b[0] - a[0]);
+    const rel = (r[0][0] + c[0][0]) / (energy * win);
+    const exclusive = r[0][0] > 0 && c[0][0] > 0 && r[1][0] / r[0][0] <= maxRel && c[1][0] / c[0][0] <= maxRel;
+    if (rel < thr || !exclusive) { frames.push(null); continue; }
+    const frame = { key: KEYS[r[0][1]][c[0][1]], energy };
+    frames.push(frame);
+    if (energy > peak) peak = energy;
   }
-
- // 去抖：连续相同键合并为一次；键间需 null 间隔才算新键
-  const out = [];
-  let prev = null;
-  for (const k of frameKeys) {
-    if (k === null) { prev = null; continue; }
-    if (k !== prev) { out.push(k); prev = k; }
+ // 第二遍：③ 绝对电平门限（按本文件候选窗的峰值定标）
+  const floor = peak * absFrac;
+  const minFrames = Math.max(1, Math.ceil(minKeyMs / hop));
+ // 先切「段」：任一被拒帧即断开，段间空隙单独记账（gapBeforeMs），供 ⑤ 自适应合并定标。
+  const segs = [];
+  let run = null;
+  for (const f of frames) {
+    if (!f || f.energy < floor) { if (run) run.gap++; continue; }
+    if (run && run.key === f.key && run.gap === 0) { run.count++; continue; }
+    const gapBeforeMs = run ? run.gap * hop / sr * 1000 : 0;
+    if (run) segs.push({ key: run.key, count: run.count, gapBeforeMs: run.gapBeforeMs });
+    run = { key: f.key, count: 1, gap: 0, gapBeforeMs };
   }
+  if (run) segs.push({ key: run.key, count: run.count, gapBeforeMs: run.gapBeforeMs });
+  const median = (a) => {
+    if (!a.length) return null;
+    const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  };
+ // ⑤ 自适应合并容差：见函数头注释。键名不同的两段之间的空隙 = 无歧义的真键间隔。
+  const diffGaps = [], allGaps = [];
+  for (let i = 1; i < segs.length; i++) {
+    allGaps.push(segs[i].gapBeforeMs);
+    if (segs[i - 1].key !== segs[i].key) diffGaps.push(segs[i].gapBeforeMs);
+  }
+  const refGap = median(diffGaps);
+  const ref = (refGap && refGap > 0) ? refGap : median(allGaps);
+  const mergeTolMs = (ref && ref > 0) ? Math.min(mergeGapMs, ref / 2) : mergeGapMs;
+ // 合并同键相邻段（累计时长，空洞本身不计入时长）；再以 ④ 最短时长过滤。
+  const mergedSegs = [];
+  for (const s of segs) {
+    const last = mergedSegs[mergedSegs.length - 1];
+    if (last && last.key === s.key && s.gapBeforeMs <= mergeTolMs) { last.count += s.count; continue; }
+    mergedSegs.push({ key: s.key, count: s.count });
+  }
+  const out = mergedSegs.filter((m) => m.count >= minFrames).map((m) => m.key);
   if (!out.length) throw new Error("DTMF 解码: 未检出有效按键（阈值 " + thr + "，可下调）");
   return out.join("");
 }
@@ -237,14 +301,18 @@ function dtmfDecode(text, p) {
 // ---- 注册 ----
 register({
   id: "dtmfWav",
-  cat: "stego",
+  cat: "audio",
   name: "DTMF 拨号音 WAV",
   desc: "按键序列 ↔ 拨号音 WAV：encode 数字(0-9 A-D * #)→叠加行/列双正弦 16位单声道 WAV(base64)；decode WAV(base64/hex)→Goertzel 检 8 基频→按键。解码支持整数 PCM(8/16/24/32bit)/IEEE float(32/64bit)/µ-law，对标并超越 dtmf2num。",
   params: [
     { key: "toneMs", label: "每键时长(ms)", type: "number", default: 200, placeholder: "20-2000（仅 encode）" },
     { key: "gapMs", label: "键间间隔(ms)", type: "number", default: 100, placeholder: "0-2000（仅 encode）" },
     { key: "amp", label: "单音幅度", type: "number", default: 0.35, placeholder: "0.05-0.5（仅 encode）" },
-    { key: "threshold", label: "解码相对能量阈值", type: "number", default: 0.15, placeholder: "0.01-0.9（仅 decode）" },
+    { key: "threshold", label: "解码双音占比阈值", type: "number", default: 0.15, placeholder: "0.01-0.9（仅 decode）" },
+    { key: "maxRel", label: "频率独占比上限", type: "number", default: 0.2, placeholder: "0.01-1（仅 decode，次强/最强 频率能量比）" },
+    { key: "absFrac", label: "绝对电平门限(占峰值)", type: "number", default: 0.3, placeholder: "0-1（仅 decode，0=关闭）" },
+    { key: "minKeyMs", label: "最短按键时长(ms)", type: "number", default: 30, placeholder: "0-1000（仅 decode，去毛刺）" },
+    { key: "mergeGapMs", label: "同键空隙合并上限(ms)", type: "number", default: 200, placeholder: "0-1000（仅 decode，0=不合并；实际容差 = min(本值, 本文件键间静音中位数/2)）" },
   ],
   encode: dtmfEncode,
   decode: dtmfDecode,

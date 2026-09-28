@@ -3,6 +3,7 @@
 // 图片走本地 public/codeimages/，IntersectionObserver 懒加载，点击看大图。
 // 自持 el/msym（icon 注水），tt/window.__ebctfT 兜底 i18n（不进主表）。零外发。
 import { icon as iconSvg } from "./icons.js";
+import { attachModalLifecycle } from "./modalLifecycle.js";
 
 // ---- 轻量 DOM 工具（本模块自持，零耦合）----
 function el(tag, attrs = {}, ...children) {
@@ -126,7 +127,7 @@ export async function renderCodeImageViewer(container) {
     el("div", { class: "op-desc" }, tt("ui.ci.desc")),
   ));
 
- // 来源横幅已按恒烈令移除（原来源声明版权归属不实）。
+ // 来源横幅已按产品负责人令移除（原来源声明版权归属不实）。
 
   const body = el("div", { class: "ci-body" });
   wrap.append(body);
@@ -244,21 +245,22 @@ export async function renderCodeImageViewer(container) {
 // ---- 模态大图弹窗（滚轮缩放）----
 // 全局单例：任意时刻只允许一个弹窗
 let _modalEl = null;      // 遮罩根节点
-let _modalKeyHandler = null;
+let _lifecycle = null;
 
-function closeModal() {
-  if (_modalKeyHandler) {
-    document.removeEventListener("keydown", _modalKeyHandler);
-    _modalKeyHandler = null;
-  }
-  if (_modalEl) {
-    _modalEl.remove();
-    _modalEl = null;
-  }
+function closeModal(immediate = false) {
+  if (_lifecycle) { _lifecycle.release(); _lifecycle = null; }
+  const ov = _modalEl;
+  _modalEl = null;
+  if (!ov) return;
+  if (immediate || ov._closing) { ov.remove(); return; }
+  ov._closing = true;
+  ov.classList.add("ci-closing");
+  setTimeout(() => { if (ov.isConnected) ov.remove(); }, 250);
 }
 
 function openModal(im) {
-  closeModal(); // 防止叠加
+  closeModal(true); // 防止叠加
+  const previousFocus = document.activeElement;
 
   const unconf = /（待确认）$/.test(im.cn);
   const aliasStr = (im.alias || []).join("、");
@@ -331,7 +333,7 @@ function openModal(im) {
   const closeBtn = el("button", {
     class: "ci-modal-close", type: "button", title: tt("ui.ci.close"),
     "aria-label": tt("ui.ci.close"),
-    onclick: closeModal,
+    onclick: () => closeModal(),
   }, msym("close"));
 
  // 头部信息：名称 / 别名 / 尺寸 / 分类
@@ -350,18 +352,16 @@ function openModal(im) {
 
   const dialog = el("div", {
     class: "ci-modal-dialog", role: "dialog", "aria-modal": "true",
+    "aria-label": cnName(im).replace(/（待确认）$/, ""),
     onclick: (e) => e.stopPropagation(), // 阻止冒泡到遮罩
   }, closeBtn, head, stage,
     el("div", { class: "ci-modal-hint" }, tt("ui.ci.zoomHint")),
   );
 
  // 遮罩：点击关闭
-  _modalEl = el("div", { class: "ci-modal-overlay", onclick: closeModal }, dialog);
+  _modalEl = el("div", { class: "ci-modal-overlay" }, dialog);
   document.body.append(_modalEl);
-
- // ESC 关闭
-  _modalKeyHandler = (e) => { if (e.key === "Escape") closeModal(); };
-  document.addEventListener("keydown", _modalKeyHandler);
+  _lifecycle = attachModalLifecycle(_modalEl, { dialog, onClose: closeModal, initialFocus: closeBtn, restoreFocusTo: previousFocus });
 
   applyTransform();
 }

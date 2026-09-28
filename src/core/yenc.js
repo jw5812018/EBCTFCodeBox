@@ -25,9 +25,10 @@
  * 契约：register({ id:"yenc", cat:"text", name, desc, params, encode, decode })。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // 关键字节：必须转义（NUL/LF/CR/'='）
 const CRITICAL = new Set([0x00, 0x0a, 0x0d, 0x3d]);
@@ -35,7 +36,8 @@ const CRITICAL = new Set([0x00, 0x0a, 0x0d, 0x3d]);
 const LEADING = new Set([0x09, 0x20, 0x2e]);
 
 function yencEncode(text, p = {}) {
-  const bytes = te(text);
+  // 字节直通：yEnc 本是二进制→文本编码，上游真字节直接编。
+  const bytes = (p && p.rawBytes) || te(text);
   let width = parseInt(p && p.width, 10);
   if (!Number.isFinite(width) || width <= 0) width = 128;
 
@@ -85,7 +87,7 @@ function yencDecode(text) {
       }
     }
   }
-  return td(bytes);
+  return finishBytesDecode(bytes, { textMode: "hex", name: "yenc" });
 }
 
 register({
@@ -93,6 +95,8 @@ register({
   cat: "text",
   name: "yEnc 编 / 解码",
   desc: "yEnc（Usenet 二进制传输编码，yEnc-1.3 规范）：每字节 +42 mod 256，关键字节 NUL/CR/LF/'=' 用 '=' 转义 +64。行首 TAB/空格/'.' 保守转义。encode 取 UTF-8 字节，decode 自动跳过 =ybegin/=yend 控制行。",
+  // encode 方向吃字节；decode 输入是 yEnc 文本，不吃字节。
+  acceptsBytes: true,
   params: [
     { key: "width", type: "number", label: "行宽", default: 128, placeholder: "每行字符数（规范常用 128/256）" },
   ],

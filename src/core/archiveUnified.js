@@ -35,6 +35,7 @@ import {
 import {
   is7z, parse7zHeader, run7zWasm, sevenZipWasmAvailable,
 } from "./sevenzip.js";
+import { bz2Decompress } from "./compressExt2.js";
 
 // ============================================================
 // 字节小工具（仅 façade 层渲染用，算法复用 compress/sevenzip）
@@ -236,6 +237,39 @@ async function tryStreamDecompress(bytes, magicName) {
 }
 
 // ============================================================
+// 7z-wasm 列表/解压公共渲染（rar/tar/xz 分支共用；wasm 缺失降级不抛）
+// ============================================================
+async function render7zWasmTry(bytes, p, lines, fmtLabel) {
+  const mode = (p && p.sevenZipMode) || "list";
+  const password = (p && p.password) || "";
+  const res = await run7zWasm(bytes, { extract: mode === "extract", password });
+  if (res === null) {
+    lines.push("");
+    lines.push("--- " + fmtLabel + " 列表 / 解压能力 ---");
+    lines.push("⚠ 7z 解压引擎（wasm）未随包或加载失败，已降级为纯识别。");
+    lines.push("  要启用真列表/解压，请放置 wasm：public/wasm/7zz.js + 7zz.wasm（本地随包，零外发）。");
+    return;
+  }
+  lines.push("");
+  lines.push("--- " + fmtLabel + " " + (mode === "extract" ? "解压 (x)" : "列表 (l)") + "（7z-wasm）---");
+  if (!res.ok) {
+    lines.push("✗ 7z 报告失败（退出码 " + res.code + "；加密包请填密码，坏头/截断包如实失败）：");
+    const tail = (res.stdout || "").split("\n").filter((l) => l && !/^\s*$/.test(l)).slice(-8);
+    for (const l of tail) lines.push("  " + l);
+    return;
+  }
+  if (res.stdout) lines.push(res.stdout);
+  if (mode === "extract") {
+    lines.push("");
+    lines.push("解出文件: " + res.files.length + " 个" + (res.files.length >= 200 ? "（达 200 上限，截断）" : ""));
+    for (const f of res.files) {
+      const r = bytesToOutput(f.bytes);
+      lines.push("· " + f.name + "  (" + f.bytes.length + " 字节, " + r.mode + ")");
+    }
+  }
+}
+
+// ============================================================
 // 归一主入口
 // ============================================================
 async function archiveUnifiedReport(text, p) {
@@ -264,7 +298,7 @@ async function archiveUnifiedReport(text, p) {
 
   if (!magic) {
     lines.push("");
-    lines.push("结果: 未匹配已知归档 magic（gzip/zlib/bzip2/zip/rar/7z/tar）");
+    lines.push("结果: 未匹配已知归档 magic（gzip/zlib/bzip2/zip/rar/7z/tar/xz）");
     lines.push("提示: 可能是 raw deflate（无头）、自定义格式或文本");
  // raw deflate 启发
     const b0 = bytes[0];
@@ -323,7 +357,42 @@ async function archiveUnifiedReport(text, p) {
     lines.push("--- bzip2 头解析 ---");
     lines.push(...renderBzip2Header(bytes));
     lines.push("");
-    lines.push("提示: bzip2 纯 JS 解压未实现（需 Bunyan/DEFLATE 算法库）；可在外部工具解压后贴回。");
+    lines.push("--- 解压 (bzip2 纯 JS) ---");
+    let out = null, berr = "";
+    try { out = new Uint8Array(bz2Decompress(bytes)); } catch (e) { berr = (e && e.message) ? e.message : String(e); }
+    if (out && out.length > 0) {
+      lines.push("✓ 解压成功: " + out.length + " 字节");
+      const rr = bytesToOutput(out);
+      const preview = rr.text.length > 500 ? rr.text.slice(0, 500) + " …(截断)" : rr.text;
+      lines.push("内容(" + rr.mode + "): " + preview.replace(/\n/g, "\n  "));
+    } else {
+      lines.push("✗ 纯 JS 解压失败: " + (berr || "输出为空"));
+     // 纯 JS 失败（如非标准流）再试 7z-wasm
+      const res = await run7zWasm(bytes, { extract: true, name: "in.bz2" });
+      if (res && res.ok && res.files.length) {
+        lines.push("");
+        lines.push("--- 7z-wasm 兜底解压 ---");
+        for (const f of res.files) {
+          const r = bytesToOutput(f.bytes);
+          lines.push("· " + f.name + "  (" + f.bytes.length + " 字节, " + r.mode + ")");
+        }
+      } else {
+        lines.push("提示: bzip2 解压失败（纯 JS 与 7z-wasm 均未成功），可在外部工具解压后贴回。");
+      }
+    }
+    return lines.join("\n");
+  }
+
+  if (name === "xz") {
+    lines.push("");
+    lines.push("--- XZ 头解析 ---");
+    const streamFlags = (bytes[4] << 8) | bytes[5];
+    const checkType = streamFlags & 0x0F;
+    const checkName = { 0x00: "无校验", 0x01: "CRC32", 0x04: "CRC64", 0x0A: "SHA-256" }[checkType] || "保留/未知(" + checkType + ")";
+    lines.push("  magic: FD 37 7A 58 5A 00");
+    lines.push("  Stream Flags: 0x" + (streamFlags >>> 0).toString(16).padStart(4, "0") + "（校验 " + checkName + "）");
+    lines.push("");
+    await render7zWasmTry(bytes, p, lines, "XZ");
     return lines.join("\n");
   }
 
@@ -338,12 +407,14 @@ async function archiveUnifiedReport(text, p) {
     lines.push("");
     lines.push("--- TAR 头解析 ---");
     lines.push(...renderTarStructure(bytes));
+    await render7zWasmTry(bytes, p, lines, "TAR");
     return lines.join("\n");
   }
 
   if (name === "rar") {
     lines.push("");
-    lines.push("提示: RAR 归档已识别，纯 JS 无法解压（RAR 专有算法，需 unrar/wasm）；可在外部工具解压后贴回。");
+    lines.push("提示: RAR 为专有格式，纯 JS 无解码器；列表/解压经 7z-wasm（内置 unRAR 代码，仅解包、只读）。");
+    await render7zWasmTry(bytes, p, lines, "RAR");
     return lines.join("\n");
   }
 
@@ -448,19 +519,19 @@ const INPUT_ENC_PARAM = {
 // ============================================================
 register({
   id: "archiveUnified",
-  cat: "forensic",
+  cat: "archive",
   name: "压缩 / 归档归一分析",
-  desc: "自动识别 gzip/zlib/bzip2/zip/rar/7z/tar → 列结构 → 能解则解（gzip/zlib 纯 JS；zip 含伪加密检测；7z 走 wasm 降级）",
+  desc: "自动识别 gzip/zlib/bzip2/zip/rar/7z/tar/xz → 列结构 → 能解则解（gzip/zlib/bzip2 纯 JS；zip 含伪加密检测；rar/tar/xz/7z 走 7z-wasm 降级）",
   params: [
     INPUT_ENC_PARAM,
     {
-      key: "sevenZipMode", label: "7z 操作", type: "select", default: "list",
+      key: "sevenZipMode", label: "归档操作（7z/RAR/tar/xz）", type: "select", default: "list",
       options: [
         { value: "list", label: "列表（l）" },
         { value: "extract", label: "解压（x）" },
       ],
     },
-    { key: "password", label: "7z 密码（可空）", type: "text", default: "", placeholder: "7z 加密档案填密码" },
+    { key: "password", label: "密码（7z/RAR 加密档案，可空）", type: "text", default: "", placeholder: "7z 加密档案填密码" },
   ],
   run: archiveUnifiedReport,
   detect: archiveUnifiedDetect,

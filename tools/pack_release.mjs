@@ -41,6 +41,7 @@ import {
   cpSync,
 } from "node:fs";
 import { join, dirname, relative, resolve, sep } from "node:path";
+import { gzipSync } from "node:zlib";
 
 // ---- 定位项目根。本文件路径含中文，必须 fileURLToPath 解码
 // （直接取 import.meta.url 的 pathname 会留 percent-encode + 前导 /，
@@ -59,15 +60,21 @@ const INCLUDE_FILES = [
   "README.md",
   "CHANGELOG.md",
   "LICENSE",
-  "点我启动.py",
+  "通用点我启动.py",
   "bridge.py",
   "HenglieICO.png",
+  // 2026-09-27 恒烈指缺补录：各平台双击启动器（v0.1.8-beta 首包漏收）
+  "32位Windows点我启动.exe",
+  "64位Windows点我启动.exe",
+  "ARM64版Windows点我启动.exe",
+  "Linux点我启动.sh",
+  "macOS点我启动.command",
 ];
 
 // 整目录递归（src 含 core/ui/i18n/plugin/main.js；public 含 fonts/th 五个 woff2
 // 约 33 MB 首屏子集 + 四平面，缺一个就有豆腐块，必须全量带；tools 打包时只带
 // exe/ —— bridge.py 的 EXE_BASE，v0.1.4 漏的就是它，构建脚本由 DIR_EXCLUDE 剔除）
-const INCLUDE_DIRS = ["src", "public", "tools", "mcp", "skills"];
+const INCLUDE_DIRS = ["src", "public", "tools", "mcp", "skills", "bin"];
 
 // 白名单目录内部的清扫（PROGRESS 表明确排除项）。
 // rel 为相对项目根的 posix 路径（目录本身也会被问询，rel 形如 "src" / ""）。
@@ -120,6 +127,10 @@ const FORBIDDEN_NAMES = ["private_key.enc", "keygen.mjs", "sign.mjs", "encrypt_k
 
 // 打包器自身产物，verify 比对时豁免（stage 目录/发行包里合法存在，不算多余）
 const SELF_ARTIFACT = "_manifest.txt";
+// T621-A：.gz 伴生件豁免——原文件在白名单内则该 .gz 合法存在（verify 不判多余、不判缺失）
+function isGzCompanion(f, include) {
+  return f.endsWith(".gz") && include.has(f.slice(0, -3));
+}
 
 // license.bin 内嵌公钥（与 src/core/license.js 同一把，SPKI DER base64，ECDSA P-256）
 const PUBLIC_KEY_B64 =
@@ -130,10 +141,10 @@ const PUBLIC_KEY_B64 =
 const VERSION_SOURCES = [
   ["src/core/version.js", /APP_VERSION\s*=\s*"([^"]+)"/],
   ["sw.js", /APP_VERSION\s*=\s*"([^"]+)"/],
-  ["index.html", /id="appVer">v([\d.]+)</],
-  ["README.md", /当前版本\s*\*\*v([\d.]+)\*\*/],
-  ["CHANGELOG.md", /^## v([\d.]+)/m],
-  ["mcp/README.md", /server 版本 `([\d.]+)`/],
+  ["index.html", /id="appVer">v([\d.]+(?:-beta\d*)?)</],
+  ["README.md", /当前版本\s*\*\*v([\d.]+(?:-beta\d*)?)\*\*/],
+  ["CHANGELOG.md", /^## v([\d.]+(?:-beta\d*)?)/m],
+  ["mcp/README.md", /server 版本 `([\d.]+(?:-beta\d*)?)`/],
 ];
 
 // ==================== 基础工具 ====================
@@ -312,6 +323,26 @@ function cmdStage(channel) {
     console.log("提示：未包含 license.bin，打渠道包请加 --channel <渠道名>");
   }
 
+  // ---- T621-A：文本类资产生成 .gz 伴生件 ----
+  // 服务端（原生启动器 static_serve.c）按 Accept-Encoding 供给同名 .gz（Content-Encoding: gzip），
+  // 全量下载场景（首载/硬刷/预缓存波）传输字节约 ×0.25。伴生件进 _manifest，verify 按
+  // 「原文件在白名单即合法」豁免（见 isGzCompanion）。二进制/字体/图片等已压缩格式不生成。
+  const GZ_EXTS = new Set([".js", ".css", ".html", ".json", ".svg", ".txt", ".xml", ".md"]);
+  let gzCount = 0;
+  let gzSaved = 0;
+  for (const f of [...walkFiles(stageDir)]) {
+    if (f === SELF_ARTIFACT || !GZ_EXTS.has(f.slice(f.lastIndexOf(".")))) continue;
+    const p = join(stageDir, f);
+    const raw = readFileSync(p);
+    if (raw.length < 1024) continue;
+    const gz = gzipSync(raw, { level: 9 });
+    if (gz.length >= raw.length * 0.9) continue; // 压缩收益不足不写，避免无谓体积
+    writeFileSync(p + ".gz", gz);
+    gzCount++;
+    gzSaved += raw.length - gz.length;
+  }
+  console.log(`.gz 伴生件：${gzCount} 个（相对原始字节节省 ${(gzSaved / 1e6).toFixed(2)} MB）`);
+
   // _manifest.txt：逐文件 posix 路径 + 字节数
   const staged = [...walkFiles(stageDir)].filter((f) => f !== SELF_ARTIFACT).sort();
   const sizes = new Map();
@@ -353,7 +384,7 @@ async function cmdVerify(target, channel) {
   const include = new Set(listIncludeFiles(channel));
   const actual = walkFiles(dir);
   const missing = [...include].filter((f) => !actual.has(f));
-  const extra = [...actual].filter((f) => !include.has(f) && f !== SELF_ARTIFACT);
+  const extra = [...actual].filter((f) => !include.has(f) && f !== SELF_ARTIFACT && !isGzCompanion(f, include));
 
   console.log(`verify ${dir}`);
   console.log(`白名单 ${include.size} 项（${channel ? "含 license.bin（渠道 " + channel + "）" : "不含 license.bin"}）`);

@@ -1,5 +1,5 @@
 /*
- * gifTiming.js — GIF 帧时序隐写解码（T344，cat:'stego'）。
+ * gifTiming.js — GIF 帧时序隐写解码（T344，cat:'image'）。
  *
  * 原理：GIF89a 多帧动画里，每一帧的显示时长藏在「图形控制扩展」
  * （Graphic Control Extension，0x21 0xF9）的 Delay Time 字段，单位厘秒（1/100 秒）。
@@ -272,7 +272,7 @@ function makeGif(csArr) {
 // ============ register ============
 
 register({
-  id: "gifTiming", family: "gif", familyLabel: "timing", cat: "stego", name: "GIF 帧时序隐写",
+  id: "gifTiming", family: "gif", familyLabel: "timing", cat: "image", name: "GIF 帧时序隐写",
   desc: "读每帧图形控制扩展的 Delay Time（厘秒），映射为数字序列 / ASCII / 阈值二值化位流，解出藏在播放时长里的信息",
   params: [
     { key: "mode", label: "映射模式", type: "select", default: "ascii",

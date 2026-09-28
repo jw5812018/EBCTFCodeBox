@@ -1,5 +1,5 @@
 /*
- * qrFormatBrute.js — QR 格式信息爆破（T518，cat:'stego'，family:'qr'）。
+ * qrFormatBrute.js — QR 格式信息爆破（T518，cat:'image'，family:'qr'）。
  *
  * 用途：格式信息区（15 位 BCH 码，两份副本）被涂改/遮挡/损坏的 QR——
  * qrDecode 依赖 readFormatInfo 识别 ECL/掩码，格式区坏则整码报废；
@@ -148,7 +148,7 @@ register({
   id: "qrFormatBrute",
   family: "qr",
   familyLabel: "formatBrute",
-  cat: "stego",
+  cat: "image",
   name: "QR 格式信息爆破",
   desc: "格式信息区损坏的 QR 抢救：枚举全部 32 组 (纠错级×掩码) 组合逐组取数去交织 RS 纠错解码，列出全部可解组合与原文（ISO/IEC 18004；能力对齐 QRazyBox）",
   noAuto: true, // 爆破 32 组全码字 RS 解码，偏重；仅在用户主动选择时运行

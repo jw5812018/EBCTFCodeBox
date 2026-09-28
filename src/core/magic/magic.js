@@ -1,8 +1,19 @@
+import { candidateSignals, literalMatcher } from "./smartCandidates.js";
+import { SIGNAL_LIMITS } from "./signals.js";
+import { domainAdmit, isAutoCandidateExcluded } from "./domain.js";
+import { scopeAdmit } from "./domainScope.js";
+import { analyzeInfoSignals } from "./infoSignals.js";
+
+// 声明式定义域组合准入：已声明 op 走字符级缩限（scopeAdmit），未声明回退既有 domainAdmit。
+function combinedAdmit(opId, text) {
+  const scoped = scopeAdmit(opId, text);
+  return scoped === null ? domainAdmit(opId, text) : scoped;
+}
 /*
  * core/magic/magic.js — Magic 一键智能识别（T32 交付）
  *
  * 升级 detect.js 的 oneClickDecode（朴素 BFS + confidence 乘积）为 CyberChef Magic 级：
- * - crib 目标过滤（CTF 杀手锏）：opts.crib 传正则源串，硬过滤只留命中候选
+ * - crib 目标过滤（CTF 杀手锏）：opts.crib 仅接受字面片段，有限加权、不硬过滤
  * - 综合评分排序：用 T31 scorer（熵+语言卡方+链长+crib）替换 confidence 乘积，分低=优
  * - 强化剪枝：自打转检测（同 op 且 output==input 放弃，lib:287）、可选 outputCheck
  * - intensive 暴力模式：对前 N 字节跑 1-byte XOR 全 255 key + 位旋转 1-7（lib:142-166）
@@ -15,7 +26,7 @@
  * score = chiSquareScore(freq, EN)
  * if (isPrintableRatio>=0.9) score -= 100 // 可打印文本奖励
  * if (useful && score > 100) score = 100 // 有用文本封顶
- * if (matchesCrib) score = -10000 // crib 命中绝对优先（本项目增强）
+ * Target/flag adjustments are bounded and applied once by the shared signal layer.
  * score += chainLength + entropy(bytes) // 链长/熵越高越不可能是正解
  * 分越低越可能是正确解。
  *
@@ -77,7 +88,7 @@ const FLAG_STRONG_RE = /(^|[^a-z])(flag|ctf|key|pass|hgame|moectf)[a-z0-9_]*[\{:
 const DEFAULTS = {
   maxDepth: 1,            // 最大解码层数（默认 1=单层；多层链式解码由 UI「多层」开关传 3）
   maxCandidates: 50,      // 最多返回候选数
-  crib: null,             // crib 正则源串（如 "flag\\{"）或 RegExp 对象，null 不过滤
+  crib: null,             // crib 字面片段（如 "flag{"），RegExp 对象忽略
   intensive: false,       // 1-byte XOR + 位旋转暴力
   bruteBytes: 100,        // intensive 只对前 N 字节跑（防大输入爆炸）
   guard: 50000,           // 总迭代兜底（防组合爆炸）
@@ -280,6 +291,65 @@ function looksLikeCiphertext(str) {
   return false;
 }
 
+// ============ 「结果 ≈ 输入」回声判据与降权 ============
+// 场景：把一段明文（或本身没编码的内容）放进一键解码时，总有若干候选只是把原样内容搬回来
+// （恒等变换、只改大小写、只剥不可见字符、只折叠空白）。它们卡方低、命中意义文本奖励 ⇒ 分低
+// 冒到最前，挤占真正解开的那条。这里给这类候选统一降权。
+//
+// 判据（只认「归一化后完全相同」，不做模糊近似——近似判据会误伤真明文）：
+//   ① 完全相同；② 仅空白差异（空格/换行/制表被增删换位）；③ 仅不可见字符被剥掉；
+//   ④ 只做了一次恒等变换（解码结果与输入归一化后一致）。
+// 归一化：剥不可见字符 → **删除全部空白** → 转小写。
+// 空白按「全部删除」而非「折叠为单空格」：只删掉/插入一个空格（如 clockCipher 把
+// "hello world" 变成 "helloworld"）同样属于「没真正解开」，且它正是明文候选冒到最前的主因。
+// 若担心误伤，注意放行条件——结果现出输入原样中没有的 flag 关键词/结构时一律放行。
+const _INVISIBLE_RE = /[\u00AD\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
+function echoNormalize(s) {
+  return String(s).replace(_INVISIBLE_RE, "").replace(/\s+/g, "").toLowerCase();
+}
+
+/** 解码结果是否 ≈ 输入（回声候选）。空输入/空结果一律返回 false。 */
+function isEchoOfInput(result, input) {
+  if (!input || !result) return false;
+  const a = echoNormalize(result);
+  return a.length > 0 && a === echoNormalize(input);
+}
+
+// flag 关键词族（与 signals.js 的关键词同族）+ 完整 flag 结构。按**原样串**取证，
+// 不预先归一化——这样「输入里本来就有 flag」判的是用户肉眼所见。
+const _FLAG_KW_SRC = "flag|ctf|key|pass";
+function flagTokens(raw) {
+  const s = String(raw || "");
+  const out = [];
+  for (const m of s.matchAll(new RegExp(_FLAG_KW_SRC, "gi"))) out.push(m[0].toLowerCase());
+  for (const m of s.matchAll(/[a-z0-9_]{2,}\{[^{}]{1,}\}/gi)) out.push("fmt:" + m[0].toLowerCase());
+  return out;
+}
+
+/**
+ * 结果里是否出现了「输入里没有的」flag 关键词或 flag 结构——回声候选的唯一放行条件。
+ * 输入里已经明写着 flag/ctf/key/pass 或完整 xxx{...} 时不算新触发（那只是把原文搬回来）。
+ * 只有输入把关键词打散（如零宽字符夹在 f 和 lag 之间）、结果剥掉后现出真结构，才算真触发。
+ */
+function hasNewFlagToken(result, input) {
+  const seen = new Set(flagTokens(input));
+  return flagTokens(result).some((t) => !seen.has(t));
+}
+
+// 展示成绩 ↔ 排序分 的单点换算（互为反函数，量纲同 scoreToConfidence）。
+function confidenceToScore(conf) {
+  const c = Math.max(0.0100001, Math.min(0.9899999, conf));
+  return 105 + 30 * Math.log(1 / c - 1);
+}
+
+// 回声候选的目标展示成绩：在原有成绩上降 70%，且不破 50%。
+// 排序分由该目标反算回 score ⇒ 「排序分」与「展示成绩」两处必然同口径，不会打架。
+const ECHO_KEEP_RATIO = 0.3;
+const ECHO_CONF_CAP = 0.5;
+function echoPenalizedScore(score) {
+  return confidenceToScore(Math.min(scoreToConfidence(score) * ECHO_KEEP_RATIO, ECHO_CONF_CAP));
+}
+
 /**
  * 综合分（参考 CyberChef Magic.mjs L328-360）。分越低越可能是正确解。
  * @private
@@ -313,12 +383,12 @@ function compositeScore(result, chainLength, matchesCrib, chain) {
  // （实测 xor:6>rot47 产物 "…5d{F-}ej" 误命中吃满奖励，把真 flag{hello_world} 压下去）。
  // 强档 -160：含 flag/ctf/key/pass 等关键词包裹的 xxx{...}，几乎确定是正解。
  // 弱档 -40 ：泛化的 word{...} 格式但无关键词，轻微加权即可，不足以翻越乱码卡方。
-  if (FLAG_STRONG_RE.test(result)) score -= 160;
+  // Target and flag bonuses are applied once in finalizeResults.
  // 弱档 -40：泛化 word{...} 格式但无 flag/ctf 关键词。加词典门槛——括号内外必须含真实
  // token（词典实词/连写英文/中文常用字），否则纯乱码包个规矩花括号（如 "xguhsld{xzrtlf_xfk}"
  // 是 atbash>base64 只解开 base 层的产物）也白拿 -40 顶到 top1。要求 hasMeaningfulToken 才给。
-  else if (FLAG_FORMAT_RE.test(result) && hasMeaningfulToken(result)) score -= 40;
- // 括号/引号配对奖励（恒烈需求）：flag 格式绝大多数是成对括号包裹（flag{...} / key(...)），
+
+ // 括号/引号配对奖励（产品裁决）：flag 格式绝大多数是成对括号包裹（flag{...} / key(...)），
  // 真解的 {}[]()<> 与引号成对闭合。轻档 -25：不越过卡方主项、也不与 FLAG_FORMAT 叠太满，
  // 但足以在两条同量级候选间把「括号闭合的那条」抬前（affine 垃圾串括号常不配对）。
  // 只认「有括号且全部配对」；无括号或有奇数括号（残缺）不给奖励。
@@ -329,29 +399,24 @@ function compositeScore(result, chainLength, matchesCrib, chain) {
  // 如 affine 把 base64 密文变成 "Us1TO1JGOLdTUi=="），说明这不是明文，是「密文的又一层密文」。
  // 重罚 +90 令其沉底，把「先 base64 解开」的真链让出来。
   if (looksLikeCiphertext(result)) score += 90;
-  // crib 命中：绝对优先，但用减法而非硬置——否则所有命中 crib 的候选被抹平成同分，
-  // 组内只能靠插入顺序排序。实测 QP 输入 "flag=3Dcaf=C3..." 里 pizzini/leetSpeak/
-  // keyboardShift/railFence 都保留了 "flag=" 前缀 → 全部假命中 crib → 真正解
-  // "flag=café測" 被 11 个垃圾同分候选挤到 #12。改减法后 compositeScore 的 chi/
-  // meaningfulText 差异得以保留，真明文在 crib 组内也能冒到 top1。
-  if (matchesCrib) score -= 10000;
- // 最小路径原则（恒烈需求）：链越长越不可能是正解。原 +chainLength(每层+1)太弱——
+  // User crib is a literal signal; its bounded adjustment is applied in finalizeResults.
+ // 最小路径原则（产品裁决）：链越长越不可能是正解。原 +chainLength(每层+1)太弱——
  // 长乱码链的 chi 差异远盖过 1 分链长差，导致「type7(1层真解) vs leetSpeak>affine(2层乱码)」
  // 分数贴太近。改每层 ×12 阶梯惩罚：depth1=+0 / depth2=+12 / depth3=+24…，
  // 让「解开就到位」的短链真解显著优于「多层拼凑」的长链，且不淹没 flag/crib 强奖励(-160/-10000)。
   score += (chainLength - 1) * 12;
- // 明文样式变换 op（leetSpeak/rot 等冷门美化算法，恒烈需求3）惩罚：
+ // 明文样式变换 op（leetSpeak/rot 等冷门美化算法，产品裁决3）惩罚：
  // 它们 detect 命中率高（含 0/1/@ 就中）却是冷门算法，开穷举/多层时总在前排刷存在感。
  // 链里含这类 op 即 +35，把它压到真正的解码链之后（真解含它极少，多为噪声二次变换）。
   if (chain && chain.some((op) => PLAINTEXT_STYLE_OPS.has(op))) score += 35;
- // xor/rot 单字节暴力候选（恒烈需求2）：整类降权。它们是「碰运气」猜测，绝大多数无意义，
+ // xor/rot 单字节暴力候选（产品裁决2）：整类降权。它们是「碰运气」猜测，绝大多数无意义，
  // 除非真解出 flag/命中 crib（那时 -160/-10000 强奖励会盖过本惩罚）。+45 把普通 xor/rot
  // 噪声压到正经解码链之后，不再前排刷屏。
   if (chain && chain.some((op) => /^(xor|rot):/.test(op))) score += 45;
   score += entropy(bytes);                       // 熵越高越不可能是正解
   score += asciiPlaintextAdjustment(result);     // MT6a 纯 ASCII 明文优先（长≥3/无U+FFFD/全ASCII）
  // 有意义文本奖励：解码结果是真英文句子/中文词语（非 flag 字样也算正解）。
- // CTF 正解常是普通单词串/句子，本项补足「只认 flag 关键词」的盲区（恒烈需求4）。
+ // CTF 正解常是普通单词串/句子，本项补足「只认 flag 关键词」的盲区（产品裁决4）。
   score += meaningfulTextBonus(result);          // 命中真实词表：最高 -120（净奖励）
   return score;
 }
@@ -383,8 +448,7 @@ function outputCheckPasses(text, check) {
  * @param {object} [opts]
  * - maxDepth 最大解码层数（默认 3）
  * - maxCandidates 最多返回候选数（默认 50，按综合分升序截断）
- * - crib 目标特征正则（字符串或 RegExp），如 "flag\\{"，命中候选绝对优先
- * 且有 crib 时**硬过滤**只留命中候选
+ * - crib 为字面片段；targets 为版本化字面目标列表。仅有限加权，不硬过滤。
  * - intensive 是否开 1-byte XOR + 位旋转暴力（默认 false）
  * - bruteBytes intensive 只对前 N 字节跑（默认 100）
  * - guard 总迭代兜底（默认 50000）
@@ -399,21 +463,15 @@ const BIG_INPUT_LIMIT = 100000;
 export async function magicDecode(input, opts = {}) {
   const o = { ...DEFAULTS, ...opts };
   if (!input || typeof input !== "string" || input.length === 0) return [];
+  // 原始输入随选项下传：finalizeResults 判定「结果 ≈ 输入」回声候选时要用（内部字段，不对外承诺）。
+  o._input = input;
   if (input.length > BIG_INPUT_LIMIT && !o._forceBig) {
     o.paramScan = false;
     o.intensive = false;
     o.maxDepth = 1;
   }
 
- // crib 正则编译
-  let cribRe = null;
-  if (o.crib) {
-    try {
-      cribRe = typeof o.crib === "string" ? new RegExp(o.crib, "i") : o.crib;
-    } catch {
-      cribRe = null; // 非法正则降级为不过滤（不阻塞解码）
-    }
-  }
+  const cribRe = literalMatcher(o.crib);
 
   const f = inputFeatures(input);
 
@@ -459,14 +517,14 @@ export async function magicDecode(input, opts = {}) {
     : (o.excludeOps instanceof Set ? o.excludeOps : new Set(o.excludeOps));
   const excluded = (opId) => _excludeSet !== null && _excludeSet.has(opId);
 
- // 候选 op 分两层（恒烈需求1：所有编解码 op 都安排上，花式算法不遗漏）：
+ // 候选 op 分两层（产品裁决1：所有编解码 op 都安排上，花式算法不遗漏）：
  // ① detectOps：有 detect 的 op —— 强信号，允许参与多层 BFS 链（≤maxDepth）。
  // ② plainOps ：无 detect 的纯编解码/花式 op —— 按字符集定义域(coarseAdmitPlain)预筛
  //    只在 depth 0 单层跑（不进 BFS，避免花式算法组合爆炸）。命中定义域才纳入。
  // requiresBridge（exe 桥）与 noAuto（想曰等重 op）排除：自动跑无意义又慢。
   const decoders = OPS.filter(
     (op) => typeof op.detect === "function" && typeof op.decode === "function"
-      && !op.requiresBridge && !op.noAuto && !NO_MAGIC_OPS.has(op.id)
+      && !isAutoCandidateExcluded(op) && !NO_MAGIC_OPS.has(op.id)
       && !excluded(op.id)
       && allowed(op.id)
   );
@@ -479,7 +537,7 @@ export async function magicDecode(input, opts = {}) {
   const plainOps = OPS.filter(
     (op) => typeof op.detect !== "function"
       && typeof op.decode === "function"
-      && !op.requiresBridge && !op.noAuto && !NO_MAGIC_OPS.has(op.id)
+      && !isAutoCandidateExcluded(op) && !NO_MAGIC_OPS.has(op.id)
       && !excluded(op.id)
       && !PARAM_SWEEP[op.id]
       && !KEYED_OPS.has(op.id)
@@ -556,7 +614,7 @@ export async function magicDecode(input, opts = {}) {
  // **关键**：默认单层解码(maxDepth=1)队列只有 depth0 一个节点，全部 op 扫描都在**一次**
  // while 迭代的内层 for 循环里跑完；若只在 while 顶层 yield/firePartial，软死线到点时代码正
  // 卡在内层 op 扫描（每个浏览器专属图像/音频 op 耗满 700ms 超时），onPartial 直到整轮扫完才
- // 触发 → 用户看到「后台继续」却画面全空（恒烈实测「你好？」5s 后空白的根因）。故内层循环每
+ // 触发 → 用户看到「后台继续」却画面全空（产品负责人实测「你好？」5s 后空白的根因）。故内层循环每
  // 轮都调此心跳：软死线一到立刻回调已得候选让 UI 先渲染，并周期让出使倒计时/中断生效。
  // 返回 true 表示已中断（新输入接管），调用方 break 收尾。
   // innerTick 额外检查硬死线：maxDepth=1 时全部 op 扫描都在内层 for 一次跑完，
@@ -580,13 +638,13 @@ export async function magicDecode(input, opts = {}) {
     if (o.intensive && cur.depth === 0 && cur.text.length > 0) {
       const head = cur.text.slice(0, o.bruteBytes);
       const bytes = latin1Bytes(head); // latin1 取字节，保 byte identity
- // 暴力候选「有意义门」（恒烈需求：精简无意义 xor/rot 噪声）：
+ // 暴力候选「有意义门」（产品裁决：精简无意义 xor/rot 噪声）：
  // 255 个 xor key + 7 个 rot 里绝大多数产乱码，全 record 会污染候选列表、淹没真解。
  // 只保留「像明文 / 命中 crib / 含 flag 特征」的暴力结果，其余乱码直接丢弃（不 record）。
  // 判据宽松取并集，宁可多留几条也不漏真解：可打印率≥0.85 或 命中 crib 或 命中 flag 格式。
       const bruteWorth = (text) => {
         if (cribRe && cribRe.test(text)) return true;         // 命中目标特征，必留
-        if (FLAG_FORMAT_RE.test(text)) return true;           // 含 xxx{...} flag 结构，必留
+        if (candidateSignals(text).signals.some(s => s.kind === "flagStrong")) return true;           // 含 xxx{...} flag 结构，必留
         return isPrintableRatio(text) >= 0.85;                // 高可打印率 = 像明文
       };
  // 1-byte XOR 全 255 key（lib:142-155）
@@ -626,11 +684,13 @@ export async function magicDecode(input, opts = {}) {
  // - !speculative 挡住 xor/rot 暴力产物再喂古典密码（投机链凑任意子串）。
     if (o.paramScan && sweepGrids && cur.depth <= 1 && !cur.speculative) {
       let scanOver = false;
+      const _layerF = inputFeatures(cur.text);
       for (const opId of paramScanList) {
         if (scanOver) break;
         const op = getOp(opId);
         if (!op || typeof op.decode !== "function") continue;
         if (!allowed(opId)) continue;   // 强度档白名单外的不扫参数网格
+        if (!sweepApplies(opId, _layerF)) continue;
         const grid = sweepGrids.get(opId);
         if (!grid || grid.length === 0) continue;
         for (const params of grid) {
@@ -681,7 +741,7 @@ export async function magicDecode(input, opts = {}) {
  // 对每个 keyed op 用 CTF 默认参数组（IV=0、常见模式/编码组合）跑 decode，产出候选。
  // 常用 op（AES 等）单个 key 不够 → keyedAttackParams 补全行业通用/CTF 常考默认参数一起试。
  // bug2 修复：不再限 depth 0——BFS 中间层节点也跑 keyed，使「base64 > vigenere(key)」这类
- // 「先解外层编码、再用密钥解古典/现代密码」的链成立（恒烈实测 base64+维吉尼亚只解出 base64
+ // 「先解外层编码、再用密钥解古典/现代密码」的链成立（产品负责人实测 base64+维吉尼亚只解出 base64
  // 就是因为 keyed 只对原始输入跑，接不到 base64 解出的中间结果上）。候选不入队（queue null）。
  // !cur.speculative：只在「可信解码链」（base64/base32 等有 detect 的 decoder 产物）上续接 keyed，
  // 不在暴力猜测链（xor:K/rot:R 产物）上跑——否则 xor 暴力串再喂 vigenere 会凑出海量假 flag 顶包。
@@ -704,7 +764,7 @@ export async function magicDecode(input, opts = {}) {
           decoded = String(decoded);
           if (decoded.length === 0 || decoded === cur.text) continue;
  // chain id 形如 aes(CBC,key:utf8,ct:base64)，与参数扫描候选同风格。
-          _record(decoded, cur, `${opId}(${tag})`, 0.5, results, seen, cribRe, null, byteStatHint);
+          _record(decoded, cur, `${opId}(${tag})`, 0.5, results, seen, cribRe, null, byteStatHint, "keyed");
         }
       }
     }
@@ -718,13 +778,16 @@ export async function magicDecode(input, opts = {}) {
       if (guard++ > o.guard) break;
       if (await innerTick()) break;   // 软死线回调 + 让出 + 中断
       if (curIsFlag && PLAINTEXT_STYLE_OPS.has(op.id)) continue;
+      if (combinedAdmit(op.id, cur.text) === false) continue;
       let score;
       try {
-        score = op.detect(cur.text);
+        // 计分地板保持 domainAdmit 口径：scope 的声明集大于 domain 意见集，
+        // 若对 domain 无意见的 op 也套 0.15 地板，会搅动它与 raw 计分 op 的相对排序。
+        score = domainAdmit(op.id, cur.text) === true ? Math.max(0.15, op.detect(cur.text)) : op.detect(cur.text);
       } catch {
         continue;
       }
-      // lenient（增强+/自定义档，恒烈 2026-08-03）：detect 未命中但输入字符种类数与
+      // lenient（增强+/自定义档，产品负责人 2026-08-03）：detect 未命中但输入字符种类数与
       // 该分类字符集大小匹配（如「喵呜」2 种字符 ≈ 二进制 2 字符表）→ 给低分兜底参与。
       // 只认「种类数」，不认具体字符——变体题（喵呜/emoji/自定义表）也能被尝试解码。
       if (o.lenient && (!score || score <= 0)) {
@@ -783,22 +846,60 @@ export async function magicDecode(input, opts = {}) {
 // 抽成独立函数供两处调用：① 软死线到点回调 onPartial（部分结果快照）② 主循环跑完最终返回。
 // **纯函数、无副作用**：每次基于当前 results 快照重算，多次调用互不干扰（软死线调一次、结尾调一次）。
 function finalizeResults(results, o) {
- // crib 软加权（原硬过滤改）：命中候选已由 compositeScore 的 score=-10000 绝对置顶
+ // 共享信号有限加权：基于原始基础分计算，重复 partial/final 不累计。
  // 这里不再删非命中候选，保证纯文本 / 无 flag 场景仍出正常候选——对齐同类实现
  // 「全部列出 + flag 高亮」而非「只留 flag」。UI 靠 matchesCrib 标记高亮。
-  let filtered = results;
+  let filtered = results.map(c => {
+    const signal = candidateSignals(c.result, o);
+    const info = analyzeInfoSignals(c.result);
+    // 统一封顶（新旧信号层口径）：用户目标(-60)与强 flag(-40)独立计分；其余普通信号
+    // （旧层关键词/结构/弱符号 + 新层结构化有效信息）合并后合计封顶 SIGNAL_LIMITS.ordinaryCap(32)。
+    // 32 严格小于 flagStrong(40)，故两层各自封顶后相加也不会突破强 flag：
+    // 排序优先级恒为 用户目标特征 > flag > 结构化有效信息 > 噪声。
+    const strongAdjust = signal.signals.reduce(
+      (a, s) => (s.kind === "target" || s.kind === "flagStrong") ? a + (s.weight || 0) : a, 0);
+    const ordinaryRaw = signal.signals.reduce(
+      (a, s) => (s.kind === "target" || s.kind === "flagStrong") ? a : a + (s.weight || 0), 0) + info.adjust;
+    const ordinaryAdjust = Math.max(-SIGNAL_LIMITS.ordinaryCap, ordinaryRaw);
+    let score = c.score + strongAdjust + ordinaryAdjust;
+    // 回声候选（结果 ≈ 输入）降权：只惩罚没真正解开的候选——成绩降 70% 且不破 50%。
+    // 放行条件：结果里出现输入原样中没有的 flag 关键词/结构（真触发 flag 才允许破 50%）。
+    const echo = isEchoOfInput(c.result, o._input);
+    const echoPenalized = echo && !hasNewFlagToken(c.result, o._input);
+    if (echoPenalized) score = echoPenalizedScore(score);
+    return { ...c, baseScore: c.score, score, confidence: scoreToConfidence(score),
+      echo, echoPenalized,
+      signals: signal.signals, signalAdjust: strongAdjust + ordinaryAdjust, signalsTruncated: signal.truncated };
+  });
+
+ // MT535-DEFAULT-DEDUP：同 op 的单层候选中，「默认参数」候选（无 paramLabel）若与某个**带参数标签**
+ // 的候选结果完全相同，则丢弃前者——带标签的行已完整表达该结果，空标签行是冗余
+ // （卡面：Caesar 25 位移必须为 1 卡 25 行）。两者都带标签时一律保留，不影响
+ // 「同算法同结果保留全部参数标签」。
+ {
+   const labeledSingles = new Set();
+   for (const c of filtered) {
+     if (c.chain.length === 1 && c.paramLabel) labeledSingles.add(c.opId + "\u0000" + c.result);
+   }
+   filtered = filtered.filter((c) => !(c.chain.length === 1 && !c.paramLabel
+     && labeledSingles.has(c.opId + "\u0000" + c.result)));
+ }
 
  // ---- 最小路径原则（需求5，奥卡姆剃刀）：同一解码结果若能由更短的链得到，
  // 只保留最短链，丢弃更长的等价链（如无必要不增实体，省空间且答案更简洁）。
  // 按 result 归组，每组保留 chain 最短的一条（同长度按综合分优先）；其余丢弃。
  // 参数扫描/keyed 候选 chain 长度均为 1，天然是最短链，不会被误删。
+  const singleResults = new Set(filtered.filter(c => c.chain.length === 1).map(c => c.result));
   const bestByResult = new Map();
   for (const c of filtered) {
-    const prev = bestByResult.get(c.result);
+    if (c.chain.length > 1 && singleResults.has(c.result)) continue;
+ // 同参数的多层等价链仍按最短链收敛（多层最短链去重不回归）。
+    const _dk = JSON.stringify(c.chain.length === 1 ? ["single", c.result, c.chain[0]] : ["multi", c.result]);
+    const prev = bestByResult.get(_dk);
     if (!prev
       || c.chain.length < prev.chain.length
       || (c.chain.length === prev.chain.length && c.score < prev.score)) {
-      bestByResult.set(c.result, c);
+      bestByResult.set(_dk, c);
     }
   }
   filtered = [...bestByResult.values()];
@@ -806,7 +907,7 @@ function finalizeResults(results, o) {
  // 综合分升序（分低=优）
   filtered.sort((a, b) => a.score - b.score);
 
- // 全列（恒烈需求）：有限可枚举的**单层候选**——参数扫描分支（caesar 25 位移 /
+ // 全列（产品裁决）：有限可枚举的**单层候选**——参数扫描分支（caesar 25 位移 /
  // affine / rotSpecial…）、base 家族、单 op 解码——只要命中字符集定义域产出结果就**全部保留**，
  // UI 靠 groupSweepCands 折叠成分组卡展示（「命中字符类型家族即全列」，
  // 而非 CyberChef Magic 只给 top-N）。此前 slice(0,30) 把 caesar 25 位移和全部 op 挤在
@@ -843,7 +944,37 @@ function scoreToConfidence(score) {
  * compositeScore 归一化，不再用它做乘积。
  * @private
  */
-function _record(text, cur, opId, detectScore, results, seen, cribRe, queue, byteStatHint) {
+//   "base64" / "caesar(shift=10)" / "xor:5" / "aes(CBC,key:utf8,ct:base64)"。
+// source 由标签形态推导（与既有标签约定一一对应，不改任何调用点）：
+//   含 "(...)" → "sweep"（参数扫描）；含 ":" → "keyed"（密钥/暴力）；否则 → "detect"。
+function _coerceParamValue(v) {
+  if (v === "true") return true;
+  if (v === "false") return false;
+  if (/^-?\d+$/.test(v)) return Number(v);
+  return v;
+}
+function _parseStepLabel(label) {
+  const s = String(label);
+  const cut = s.search(/[(:]/);
+  const opId = cut === -1 ? s : s.slice(0, cut);
+  const paren = /\(([^)]*)\)/.exec(s);
+  let params = null, paramLabel = null, source = "detect";
+  if (paren) {
+    paramLabel = paren[1];
+    const obj = Object.create(null);
+    for (const kv of paren[1].split(",")) {
+      const i = kv.indexOf("=");
+      if (i > 0) obj[kv.slice(0, i).trim()] = _coerceParamValue(kv.slice(i + 1).trim());
+    }
+    if (Object.keys(obj).length) params = obj;
+    source = "sweep";
+  } else if (cut !== -1 && s[cut] === ":") {
+    paramLabel = s.slice(cut + 1);
+    source = "keyed";
+  }
+  return { opId, params, paramLabel, source };
+}
+function _record(text, cur, opId, detectScore, results, seen, cribRe, queue, byteStatHint, source = null) {
   const newChain = [...cur.chain, opId];
   const matchesCrib = cribRe ? cribRe.test(text) : false;
 
@@ -859,7 +990,19 @@ function _record(text, cur, opId, detectScore, results, seen, cribRe, queue, byt
     score -= BYTESTAT_NOMINATE_WEIGHT;
   }
   const confidence = scoreToConfidence(score);
-  results.push({ chain: newChain, result: text, confidence, score, matchesCrib });
+ // **增量**补充 opId / steps / params / paramLabel / signals。消费方优先读 steps[0].opId；
+ // params/paramLabel 缺席即「未提供」（不表示「无参数」）。signals 由统一文本信号层提供。
+  const _step = _parseStepLabel(opId);
+  if (source) _step.source = source;
+  const _steps = [...(cur.steps || []), _step];
+  results.push({
+    chain: newChain, result: text, confidence, score, matchesCrib,
+    opId: _parseStepLabel(newChain[0]).opId,
+    steps: _steps, source: _step.source,
+    signals: cur.signals || [],
+    ...(_step.params ? { params: _step.params } : {}),
+    ...(_step.paramLabel ? { paramLabel: _step.paramLabel } : {}),
+  });
 
  // queue 可为 null：参数扫描候选只记录不入队（防 BFS 二层组合爆炸）。
  // queue.conf 保留但已非 confidence 来源（confidence 由 score 归一化），供未来扩展。
@@ -869,7 +1012,7 @@ function _record(text, cur, opId, detectScore, results, seen, cribRe, queue, byt
  // 阳性顶到 99%）。可信解码链（base64 等 detect decoder）非 speculative，可续接 vigenere。
   if (queue) {
     const speculative = cur.speculative || /^(xor:|rot:)/.test(opId);
-    queue.push({ text, chain: newChain, conf: confidence, lastOpId: opId, depth: cur.depth + 1, speculative });
+    queue.push({ text, chain: newChain, conf: confidence, lastOpId: opId, depth: cur.depth + 1, speculative, steps: _steps });
   }
 }
 

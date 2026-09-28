@@ -37,8 +37,26 @@ license.bin
 
 # 一次性草稿 / 本地脚本，不入库
 启动无限制克劳德.*
+/.workbuddy-ai/
+/启动OpenCode.ps1
 
 # ── C oracle 调试产物（本地验证用，不入库）──
 mickey_oracle.obj
 *_oracle.exe
 *_oracle.obj
+
+# Native launcher source and build evidence are retained locally only.
+/原生启动器/
+*.obj
+*.pdb
+*.ilk
+
+# ── 本地插件安装数据 / 本地工具残留（不入库）──
+/plugins/
+/.zcodeignore
+/bridge_cli.py
+
+# ── 浏览器扩展全线取消后的 MCP 桥残留（保留本地，不上传）──
+/mcp/extension_bridge.py
+/mcp/extension_worker.mjs
+/mcp/worker/

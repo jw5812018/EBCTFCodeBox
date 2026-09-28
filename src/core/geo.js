@@ -167,82 +167,152 @@ function geohashDecode(hash) {
 
 const OLC_ALPHABET = "23456789CFGHJMPQRVWX";
 const OLC_SEPARATOR = "+";
-const OLC_PAIR_CODE_LENGTH = 10;
+const OLC_PADDING = "0";
+const OLC_PAIR_CODE_LENGTH = 10;    // 成对段最大显著位数
+const OLC_MAX_DIGIT_COUNT = 15;     // 显著位数上限（超出按规范截断到 15）
+const OLC_SEPARATOR_POSITION = 8;   // "+" 固定在显著位第 8 位
+const OLC_GRID_ROWS = 5;
+const OLC_GRID_COLUMNS = 4;
+const OLC_PAIR_PRECISION = 8000;          // 20^3：成对段整数标度
+const OLC_FINAL_LAT_PRECISION = 25000000; // 20^3 * 5^5：纬度整格标度
+const OLC_FINAL_LNG_PRECISION = 8192000;  // 20^3 * 4^5：经度整格标度
+// 成对段分辨率（保留导出，兼容既有引用；编码/解码改用规范整数标度）
 const OLC_GRID_SIZE = [20.0, 1.0, 0.05, 0.0025, 0.000125];
 
-// 标准 OLC 编码（支持 8 短码 / 11 全码）
-function olcEncodeStd(lat, lon, codeLength = 11) {
- // 标准 OLC：codeLength 8（短码）或 11（全码 = 8 + + + 2 + ... ）
- // 实际上 OLC 标准全码 = 4 对 + "+" + N 对（N>=1）
- // 11 字符 = 4对(8) + "+" + 1对(2) = 11 字符（不含 "+" 的纯字符数 = 10）
- // 我们支持：8（短码无 +）和 11（全码含 + 后 2 字符）
-  if (codeLength !== 8 && codeLength !== 11 && codeLength !== 10 && codeLength !== 12) {
-    codeLength = 11;
+// 规范有效性（google/open-location-code 官方 isValid 口径）：
+// 至多一个 "+"；"+" 在偶数位且 ≤8；"0" 只能作填充（成对偶数个、紧邻 "+" 前、且 "+" 为末字符）。
+function olcIsValid(code) {
+  const c = String(code);
+  if (c.length < 2) return false;
+  if (c.split(OLC_SEPARATOR).length > 2) return false;
+  const sep = c.indexOf(OLC_SEPARATOR);
+  if (sep === -1 || sep > OLC_SEPARATOR_POSITION || sep % 2 === 1) return false;
+  const pad = c.indexOf(OLC_PADDING);
+  if (pad !== -1) {
+    if (sep < OLC_SEPARATOR_POSITION) return false;
+    if (pad === 0) return false;
+    const pads = c.slice(pad, c.lastIndexOf(OLC_PADDING) + 1);
+    if (pads.length % 2 === 1) return false;
+    for (const ch of pads) if (ch !== OLC_PADDING) return false;
+    if (!c.endsWith(OLC_SEPARATOR)) return false;
   }
-  let latVal = lat + 90;
-  let lonVal = lon + 180;
-  while (lonVal >= 360) lonVal -= 360;
-  while (lonVal < 0) lonVal += 360;
-  while (latVal >= 180) latVal -= 180;
-  while (latVal < 0) latVal += 180;
-
-  let code = "";
-  const totalPairs = 5; // 5 对 = 10 字符（标准全码前 10 字符）
-  for (let i = 0; i < totalPairs; i++) {
-    const gridSize = OLC_GRID_SIZE[i];
-    const latIdx = Math.floor(latVal / gridSize);
-    const lonIdx = Math.floor(lonVal / gridSize);
-    latVal -= latIdx * gridSize;
-    lonVal -= lonIdx * gridSize;
-    code += OLC_ALPHABET[latIdx] + OLC_ALPHABET[lonIdx];
-    if (i === 3) code += OLC_SEPARATOR; // 第 8 字符后插 +
+  if (c.length - sep - 1 === 1) return false;
+  for (const ch of c) {
+    const u = ch.toUpperCase();
+    if (OLC_ALPHABET.indexOf(u) < 0 && u !== OLC_SEPARATOR && u !== OLC_PADDING) return false;
   }
- // code 现在是 10 字符 + "+" = 11 字符（标准全码）
-  if (codeLength === 8) {
- // 短码：只保留前 8 字符（无 +）
-    return code.slice(0, 8);
-  }
-  return code; // 11 字符全码
+  return true;
 }
 
+// 规范全码判定（官方 isFull 口径）：短码（"+" 位 <8）需参考点，本 op 无参考点故拒收；
+// 首字符须保证解码纬度 <90，第二字符须保证经度 <180。
+function olcIsFull(code) {
+  if (!olcIsValid(code)) return false;
+  const c = String(code);
+  const sep = c.indexOf(OLC_SEPARATOR);
+  if (sep >= 0 && sep < OLC_SEPARATOR_POSITION) return false;
+  const latIdx = OLC_ALPHABET.indexOf(c[0].toUpperCase());
+  if (latIdx < 0 || latIdx >= 9) return false;
+  if (c.length > 1) {
+    const lngIdx = OLC_ALPHABET.indexOf(c[1].toUpperCase());
+    if (lngIdx < 0 || lngIdx >= 18) return false;
+  }
+  return true;
+}
+
+// 标准 OLC 编码（支持 8 短码 / 11 全码）
+// 标准 OLC 编码。codeLength = 显著位数（不含 "+"），规范允许 2/4/6/8/10 及 11~15。
+// 码长 >10 时在成对段之后追加 4×5 网格细分；<8 时用 "0" 填充到 8 位再放 "+"。
+// 纬度按规范 clip 到 [-90,90]（lat=90 取上边界格，不环绕）；经度按规范归一化到 [-180,180)。
+function olcEncodeStd(lat, lon, codeLength = 10) {
+  let len = codeLength;
+  if (len < 2 || (len < OLC_PAIR_CODE_LENGTH && len % 2 === 1)) {
+    throw new Error(`非法 OLC 码长（须 ≥2，且 <10 时为偶数）: ${codeLength}`);
+  }
+  if (len > OLC_MAX_DIGIT_COUNT) len = OLC_MAX_DIGIT_COUNT;
+
+  const latClamped = lat > 90 ? 90 : (lat < -90 ? -90 : lat);
+  let lonNorm = lon;
+  while (lonNorm >= 180) lonNorm -= 360;
+  while (lonNorm < -180) lonNorm += 360;
+
+  let latVal = Math.floor(latClamped * OLC_FINAL_LAT_PRECISION) + 90 * OLC_FINAL_LAT_PRECISION;
+  const latMax = 2 * 90 * OLC_FINAL_LAT_PRECISION;
+  if (latVal < 0) latVal = 0;
+  else if (latVal >= latMax) latVal = latMax - 1; // 极点：lat=90 恰在上边界 → 取最大格
+  const lngRange = 2 * 180 * OLC_FINAL_LNG_PRECISION;
+  let lngVal = Math.floor(lonNorm * OLC_FINAL_LNG_PRECISION) + 180 * OLC_FINAL_LNG_PRECISION;
+  lngVal = ((lngVal % lngRange) + lngRange) % lngRange;
+
+  const digits = [];
+  if (len > OLC_PAIR_CODE_LENGTH) {
+    for (let i = 0; i < OLC_MAX_DIGIT_COUNT - OLC_PAIR_CODE_LENGTH; i++) {
+      const latDigit = latVal % OLC_GRID_ROWS;
+      const lngDigit = lngVal % OLC_GRID_COLUMNS;
+      digits.push(OLC_ALPHABET[latDigit * OLC_GRID_COLUMNS + lngDigit]);
+      latVal = Math.floor(latVal / OLC_GRID_ROWS);
+      lngVal = Math.floor(lngVal / OLC_GRID_COLUMNS);
+    }
+  } else {
+    latVal = Math.floor(latVal / Math.pow(OLC_GRID_ROWS, OLC_MAX_DIGIT_COUNT - OLC_PAIR_CODE_LENGTH));
+    lngVal = Math.floor(lngVal / Math.pow(OLC_GRID_COLUMNS, OLC_MAX_DIGIT_COUNT - OLC_PAIR_CODE_LENGTH));
+  }
+  for (let i = 0; i < OLC_PAIR_CODE_LENGTH / 2; i++) {
+    digits.push(OLC_ALPHABET[lngVal % 20]);
+    digits.push(OLC_ALPHABET[latVal % 20]);
+    latVal = Math.floor(latVal / 20);
+    lngVal = Math.floor(lngVal / 20);
+  }
+  let code = digits.reverse().join("");
+  code = code.slice(0, OLC_SEPARATOR_POSITION) + OLC_SEPARATOR + code.slice(OLC_SEPARATOR_POSITION);
+  if (len >= OLC_SEPARATOR_POSITION) return code.slice(0, len + 1);
+  return code.slice(0, len) + OLC_PADDING.repeat(OLC_SEPARATOR_POSITION - len) + OLC_SEPARATOR;
+}
+
+// 标准 OLC 解码（仅全码）。按规范整数标度取格，并还原官方 CodeArea 的中心点。
 function olcDecode(code) {
-  code = String(code).trim().toUpperCase().replace(/\s/g, "");
- // 校验：含 + 且 + 在第 8 位（标准）
-  if (code.includes(OLC_SEPARATOR)) {
-    if (code.indexOf(OLC_SEPARATOR) !== 8) {
-      throw new Error(`OLC 分隔符 "+" 必须在第 8 位，得到: ${code}`);
+  const raw = String(code).trim();
+  if (!olcIsFull(raw)) {
+    throw new Error(`非法 OLC 全码（须含 "+" 于第 8 位、长度合法、字符在字母表内；短码需参考点）: ${code}`);
+  }
+  const c = raw.toUpperCase().replace(/[+0]/g, "").slice(0, OLC_MAX_DIGIT_COUNT);
+  let normalLat = -90 * OLC_PAIR_PRECISION;
+  let normalLng = -180 * OLC_PAIR_PRECISION;
+  let gridLat = 0;
+  let gridLng = 0;
+  const pairDigits = Math.min(c.length, OLC_PAIR_CODE_LENGTH);
+  let pv = Math.pow(20, OLC_PAIR_CODE_LENGTH / 2 - 1); // 20^4 = 160000
+  for (let i = 0; i < pairDigits; i += 2) {
+    normalLat += OLC_ALPHABET.indexOf(c[i]) * pv;
+    normalLng += OLC_ALPHABET.indexOf(c[i + 1]) * pv;
+    if (i < pairDigits - 2) pv = Math.floor(pv / 20);
+  }
+  let latPrecision = pv / OLC_PAIR_PRECISION;
+  let lngPrecision = pv / OLC_PAIR_PRECISION;
+  if (c.length > OLC_PAIR_CODE_LENGTH) {
+    let rowpv = Math.pow(OLC_GRID_ROWS, OLC_MAX_DIGIT_COUNT - OLC_PAIR_CODE_LENGTH - 1); // 5^4
+    let colpv = Math.pow(OLC_GRID_COLUMNS, OLC_MAX_DIGIT_COUNT - OLC_PAIR_CODE_LENGTH - 1); // 4^4
+    const gridDigits = Math.min(c.length, OLC_MAX_DIGIT_COUNT);
+    for (let i = OLC_PAIR_CODE_LENGTH; i < gridDigits; i++) {
+      const dv = OLC_ALPHABET.indexOf(c[i]);
+      gridLat += Math.floor(dv / OLC_GRID_COLUMNS) * rowpv;
+      gridLng += (dv % OLC_GRID_COLUMNS) * colpv;
+      if (i < gridDigits - 1) {
+        rowpv = Math.floor(rowpv / OLC_GRID_ROWS);
+        colpv = Math.floor(colpv / OLC_GRID_COLUMNS);
+      }
     }
-    code = code.replace(OLC_SEPARATOR, "");
+    latPrecision = rowpv / OLC_FINAL_LAT_PRECISION;
+    lngPrecision = colpv / OLC_FINAL_LNG_PRECISION;
   }
-  if (code.length < 2 || code.length % 2 !== 0) {
-    throw new Error(`OLC 长度需为偶数对（去除 + 后），得到: ${code}`);
-  }
-  if (code.length > 10) code = code.slice(0, 10);
-  const pairs = code.length / 2;
-
-  let latVal = 0;
-  let lonVal = 0;
-  let latRes = 180.0; // 初始分辨率
-  let lonRes = 360.0;
-
-  for (let i = 0; i < pairs; i++) {
-    const gridSize = OLC_GRID_SIZE[i];
-    const latIdx = OLC_ALPHABET.indexOf(code[i * 2]);
-    const lonIdx = OLC_ALPHABET.indexOf(code[i * 2 + 1]);
-    if (latIdx < 0 || lonIdx < 0) {
-      throw new Error(`非法 OLC 字符（仅允许 ${OLC_ALPHABET}）: ${code}`);
-    }
-    latVal += latIdx * gridSize;
-    lonVal += lonIdx * gridSize;
-  }
-
- // 还原 lat/lon（中心点）
-  const finalGrid = OLC_GRID_SIZE[pairs - 1];
-  const lat = latVal + finalGrid / 2 - 90;
-  let lon = lonVal + finalGrid / 2 - 180;
- // 经度环绕
-  while (lon > 180) lon -= 360;
-  while (lon < -180) lon += 360;
+  const latF = normalLat / OLC_PAIR_PRECISION + gridLat / OLC_FINAL_LAT_PRECISION;
+  const lonF = normalLng / OLC_PAIR_PRECISION + gridLng / OLC_FINAL_LNG_PRECISION;
+  const latLo = Math.round(latF * 1e14) / 1e14;
+  const lonLo = Math.round(lonF * 1e14) / 1e14;
+  const latHi = Math.round((latF + latPrecision) * 1e14) / 1e14;
+  const lonHi = Math.round((lonF + lngPrecision) * 1e14) / 1e14;
+  const lat = Math.min(latLo + (latHi - latLo) / 2, 90);
+  const lon = Math.min(lonLo + (lonHi - lonLo) / 2, 180);
   return { lat, lon };
 }
 
@@ -498,12 +568,15 @@ const geoHashPrecisionParam = {
 
 const olcLengthParam = {
   key: "codeLength",
-  label: "码长",
+  label: "码长（显著位数，不含 +）",
   type: "select",
-  default: "11",
+  default: "10",
   options: [
-    { value: "8", label: "8 位短码（无 +）" },
-    { value: "11", label: "11 位全码（8+2 含 +）" },
+    { value: "6", label: "6 位（约 5.5km）" },
+    { value: "8", label: "8 位加号码（约 275m）" },
+    { value: "10", label: "10 位全码（约 14m，默认）" },
+    { value: "11", label: "11 位网格码（约 3m）" },
+    { value: "12", label: "12 位网格码（约 0.6m）" },
   ],
 };
 
@@ -554,11 +627,11 @@ register({
   id: "geoPlusCode",
   cat: "radix",
   name: "Plus Code / OLC",
-  desc: "Google Open Location Code。字母表 23456789CFGHJMPQRVWX，8 字符短码或 11 字符全码（含 + 分隔符）。",
+  desc: "Google Open Location Code（OLC）。字母表 23456789CFGHJMPQRVWX。码长为显著位数（不含 +）：2/4/6/8/10 成对编码，11~15 追加 4×5 网格细分；<8 用 0 填充。默认 10 位（11 字符含 +）。",
   params: [olcLengthParam],
   encode(text, p) {
     const { lat, lon } = parseLatLon(text);
-    return olcEncodeStd(lat, lon, parseInt(p.codeLength || "11", 10));
+    return olcEncodeStd(lat, lon, parseInt(p.codeLength || "10", 10));
   },
   decode(text, p) {
     void p;

@@ -1,5 +1,5 @@
 /*
- * imageStructUnified.js — 图像结构解析归一（cat:'analysis'，单向 run + producer）。
+ * imageStructUnified.js — 图像结构解析归一（cat:'image'，单向 run + producer）。
  *
  * 场景：CTF misc 里图像题第一道工序——搞清图像是什么格式、尺寸多少、有没有藏数据。
  * pngChunks/imgMeta/pngSizeRecover/jpegSizeRead/gifSizeRead/imagefix 分散在 5 个 op
@@ -185,6 +185,17 @@ function analyzePng(bytes) {
       level: pc.anyCrcFail ? "alert" : "info", icon: "data_object",
       body: lines.join("\n"),
     });
+   // PLTE / 索引位流摘要（调色板图常藏 LSB/索引隐写；压缩文本已由 pngChunks 内 inflate 解出）
+    const plteC = pc.chunks.find((c) => c.type === "PLTE");
+    if (plteC) {
+      const n = Math.floor(plteC.len / 3);
+      const pLines = [`PLTE: ${n} 项调色板（${plteC.len} 字节）`];
+      if (colorType === 3) {
+        pLines.push(`色彩类型 3（索引色，bitDepth=${bitDepth}）：索引位流 ${size.width}×${size.height}`);
+        pLines.push("导出原块 / PLTE / 索引位流 → 「PNG 全块解析」op 勾选导出");
+      }
+      sections.push({ id: "png-plte", title: "PNG 调色板", level: "info", icon: "palette", body: pLines.join("\n") });
+    }
   }
 
  // 宽高异常检测 + 爆破恢复
@@ -598,9 +609,9 @@ function formatReport(bytes) {
 
 register({
   id: "imageStructUnified",
-  cat: "forensic",
+  cat: "image",
   name: "图像结构分析（归一）",
-  desc: "拖图/粘贴 base64 自动识别 PNG/JPG/GIF/BMP，统一输出文件头/尺寸/块结构/EXIF/XMP/尾部附加数据/宽高异常修复建议。归并 pngChunks/imgMeta/pngSizeRecover/jpegSizeRead/gifSizeRead 五个 op",
+  desc: "拖图/粘贴 base64 自动识别 PNG/JPG/GIF/BMP，统一输出文件头/尺寸/块结构/EXIF/XMP/尾部附加数据/宽高异常修复建议。归并 pngChunks/imgMeta/jpegSizeRead/gifSizeRead 四个 op；宽高修复动作仍由 pngSizeRecover/bmpSizeRecover/jpgSizeRecover 单独提供",
   params: [],
   run: function (text, p) {
  // 拖入文件走 rawBytes 通道（acceptsBytes 约定）：真字节优先，跳过 base64 文本解析。

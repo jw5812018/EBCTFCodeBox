@@ -36,8 +36,28 @@
  * 本文件不重复注册以避 id 冲突（
  */
 import { register } from "./registry.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
 
 const te = (s) => new TextEncoder().encode(s);
+
+// 字节通道的方向语义（与 base/hash 的样板同口径，按本族方向取反）：
+//   · decode 的输入本质是「目标字符集的字节」（UI 上以 hex / latin1 文本承载）——
+//     上游交来真字节时直接按目标字符集解读（rawBytes 优先，避免文本通道的 hex 表示
+//     与用户 format 参数打架）。
+//   · encode 的输入本质是「待转换文本」——上游真字节先按严格 UTF-8 取回文本；
+//     不是合法 UTF-8 就显式拒绝（字节不是文本，不能当待编码内容）。
+function decodeBytesIn(text, p, format) {
+  return (p && p.rawBytes) || parseBytes(text, format);
+}
+function textFromRawBytes(text, p) {
+  const raw = p && p.rawBytes;
+  if (!raw) return text;
+  const loss = decodeUtf8Lossless(raw);
+  if (!loss.ok) {
+    throw new Error("上游字节不是合法 UTF-8 文本，无法作为待编码文本。若想按目标字符集解读这批字节，请改用 decode 方向。");
+  }
+  return loss.text;
+}
 
 // ============ 字节 ↔ hex / latin1（二进制串）============
 function bytesToHex(bytes) {
@@ -153,18 +173,18 @@ function bytesToStr(label, bytes) {
 // ============ GBK / GB2312 / GB18030 ↔ UTF-8 ============
 function gbEncode(text, p) {
   const cs = (p && p.charset) || "gbk";
-  return formatBytes(strToBytes(cs, text), (p && p.format) || "hex");
+  return formatBytes(strToBytes(cs, textFromRawBytes(text, p)), (p && p.format) || "hex");
 }
 function gbDecode(text, p) {
   const cs = (p && p.charset) || "gbk";
-  return bytesToStr(cs, parseBytes(text, (p && p.format) || "hex"));
+  return bytesToStr(cs, decodeBytesIn(text, p, (p && p.format) || "hex"));
 }
 
 // ============ 通用单字符集 op 工厂（big5/shift_jis/euc-kr/latin 全系）============
 function makeCodec(label) {
   return {
-    encode: (text, p) => formatBytes(strToBytes(label, text), (p && p.format) || "hex"),
-    decode: (text, p) => bytesToStr(label, parseBytes(text, (p && p.format) || "hex")),
+    encode: (text, p) => formatBytes(strToBytes(label, textFromRawBytes(text, p)), (p && p.format) || "hex"),
+    decode: (text, p) => bytesToStr(label, decodeBytesIn(text, p, (p && p.format) || "hex")),
   };
 }
 
@@ -254,6 +274,7 @@ function ebcdicEncode(text, p) {
   const cp = (p && p.codepage) || "cp037";
   const tbl = EBCDIC_TABLES[cp];
   if (!tbl) throw new Error(`未知 EBCDIC 码页: ${cp}`);
+  text = textFromRawBytes(text, p);
   const out = [];
   for (const ch of text) {
     out.push(ch in tbl ? tbl[ch] : 0x6F); // 未知 → EBCDIC '?'
@@ -264,7 +285,7 @@ function ebcdicDecode(text, p) {
   const cp = (p && p.codepage) || "cp037";
   const rev = EBCDIC_REVERSE[cp];
   if (!rev) throw new Error(`未知 EBCDIC 码页: ${cp}`);
-  const bytes = parseBytes(text, (p && p.format) || "hex");
+  const bytes = decodeBytesIn(text, p, (p && p.format) || "hex");
   let s = "";
   for (const b of bytes) s += (b in rev) ? rev[b] : "\uFFFD";
   return s;
@@ -276,6 +297,7 @@ function utf16Encode(text, p) {
   const endian = (p && p.endian) || "BE"; // BE | LE | auto(auto 同 BE)
   const wantBE = endian !== "LE";
   const addBom = !!(p && p.bom);
+  text = textFromRawBytes(text, p);
   const out = [];
   if (addBom) {
     if (wantBE) out.push(0xFE, 0xFF);
@@ -300,7 +322,7 @@ function utf16Encode(text, p) {
   return formatBytes(new Uint8Array(out), (p && p.format) || "hex");
 }
 function utf16Decode(text, p) {
-  const bytes = parseBytes(text, (p && p.format) || "hex");
+  const bytes = decodeBytesIn(text, p, (p && p.format) || "hex");
   let endian = (p && p.endian) || "BE";
   let start = 0;
  // BOM 自动检测
@@ -363,6 +385,9 @@ const FORMAT_PARAM = {
 register({
   id: "gbCharset", cat: "text", name: "GBK / GB2312 / GB18030",
   desc: "中文字符集 ↔ UTF-8（TextDecoder 解码 + 运行时反向建表编码）",
+  // 字符集族方向与 base/hash 相反：decode 吃字节（按目标字符集解读原字节），
+  // encode 只吃文本（真字节须先按严格 UTF-8 取回文本，否则显式拒绝）。
+  acceptsBytes: true,
   params: [
     { key: "charset", label: "字符集", type: "select", default: "gbk",
       options: [
@@ -394,6 +419,7 @@ register({
 register({
   id: "big5", cat: "text", name: "Big5 繁体中文",
   desc: "Big5 ↔ UTF-8（TextDecoder + 反向建表）",
+  acceptsBytes: true, // decode 吃字节；encode 只吃文本（同 gbCharset 口径）
   params: [FORMAT_PARAM],
   ...makeCodec("big5"),
 });
@@ -401,6 +427,7 @@ register({
 register({
   id: "shiftJis", cat: "text", name: "Shift-JIS 日文",
   desc: "Shift-JIS ↔ UTF-8（TextDecoder + 反向建表）",
+  acceptsBytes: true, // decode 吃字节；encode 只吃文本（同 gbCharset 口径）
   params: [FORMAT_PARAM],
   ...makeCodec("shift_jis"),
 });
@@ -408,6 +435,7 @@ register({
 register({
   id: "eucKr", cat: "text", name: "EUC-KR 韩文",
   desc: "EUC-KR ↔ UTF-8（TextDecoder + 反向建表）",
+  acceptsBytes: true, // decode 吃字节；encode 只吃文本（同 gbCharset 口径）
   params: [FORMAT_PARAM],
   ...makeCodec("euc-kr"),
 });
@@ -415,6 +443,7 @@ register({
 register({
   id: "latinCharset", cat: "text", name: "Latin / ISO-8859 / Windows 单字节",
   desc: "ISO-8859 全系 + Windows 码页 ↔ UTF-8（单字节直映）",
+  acceptsBytes: true, // decode 吃字节；encode 只吃文本（同 gbCharset 口径）
   params: [
     { key: "charset", label: "字符集", type: "select", default: "iso-8859-1",
       options: [
@@ -436,13 +465,14 @@ register({
     },
     FORMAT_PARAM,
   ],
-  encode: (text, p) => formatBytes(strToBytes((p && p.charset) || "iso-8859-1", text), (p && p.format) || "hex"),
-  decode: (text, p) => bytesToStr((p && p.charset) || "iso-8859-1", parseBytes(text, (p && p.format) || "hex")),
+  encode: (text, p) => formatBytes(strToBytes((p && p.charset) || "iso-8859-1", textFromRawBytes(text, p)), (p && p.format) || "hex"),
+  decode: (text, p) => bytesToStr((p && p.charset) || "iso-8859-1", decodeBytesIn(text, p, (p && p.format) || "hex")),
 });
 
 register({
   id: "ebcdic", cat: "text", name: "EBCDIC",
   desc: "IBM EBCDIC ↔ ASCII（内嵌 037/1047 码表，TextDecoder 不支持）",
+  acceptsBytes: true, // decode 吃字节（按 EBCDIC 码页解读）；encode 只吃文本
   params: [
     { key: "codepage", label: "码页", type: "select", default: "cp037",
       options: [
@@ -458,6 +488,7 @@ register({
 register({
   id: "utf16", cat: "text", name: "UTF-16 BE/LE",
   desc: "UTF-16 编解码 + BOM 处理（encode 可加 BOM，decode 自动识别 BOM）",
+  acceptsBytes: true, // decode 吃字节（UTF-16 字节流）；encode 只吃文本
   params: [
     { key: "endian", label: "字节序", type: "select", default: "BE",
       options: [

@@ -173,7 +173,7 @@ function _b64OrHexToBytes(text) {
 
 register({
   id: "imgFft",
-  cat: "stego",
+  cat: "stegoFile",
   name: "图像 2D FFT 幅度谱",
   desc: "对 PNG/BMP 做 2D 傅里叶变换，输出 log 幅度谱（低频居中/fftshift）。CTF 频域隐写常在幅度谱里藏 flag 文字/图案（图片肉眼正常，频域现形）。重采样到 2 的幂（≤maxSize）。",
   params: [

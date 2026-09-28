@@ -42,13 +42,18 @@ export const CATEGORIES = [
   { id: "radix",   name: "进制 / 字符集",  icon: "calculate" },
   { id: "analysis",name: "分析 / 爆破",    icon: "query_stats" },
   { id: "crypto",  name: "密码攻击",       icon: "vpn_key" },
-  { id: "forensic",name: "取证 / 文件",    icon: "travel_explore" },
+  { id: "archive", name: "压缩 / 归档",    icon: "compress" },
+  { id: "crack",   name: "口令 / 归档破解", icon: "lock" },
+  { id: "forensic",name: "取证 / 流量",    icon: "travel_explore" },
+  { id: "filefmt", name: "文件格式 / 结构", icon: "description" },
   { id: "data",    name: "数据结构 / 序列化", icon: "web" },
-  { id: "stego",   name: "隐写 / 图像",    icon: "image" },
- // ---- 本地桥·外部 exe 专用分类（requiresBridge，仅 Windows + 起桥可用），按用途细分 ----
- // bridgeLang（语言执行）2026-09-13 恒烈裁删：成员已全部移植纯 JS/wasm，分类空转。
- // bridgeForensic（检测取证）2026-09-13 撤销：ntfsstreams GUI 被 adsTool（forensic 类）替代。
-  { id: "bridgeStego",    name: "本地桥·隐写嵌入", icon: "visibility_off" },
+  { id: "image",   name: "图像 / 二维码",  icon: "image" },
+  { id: "audio",   name: "音频 / 音视频",  icon: "graphic_eq" },
+  // 隐写按原理拆两类：文本隐写 = 载体是文本本身的字符/编码特性；文件隐写 = 载体是图像/音频/二进制/网络包的字节与结构。
+  // 原「隐写」（stego）与「本地桥·隐写嵌入」（bridgeStego）已解散：成员全部迁入这两类，
+  // 本地桥 4 个外部 exe 工具并入文件隐写并保留 requiresBridge（EXE 徽章）。
+  { id: "stegoText", name: "文本隐写",     icon: "visibility_off" },
+  { id: "stegoFile", name: "文件隐写",     icon: "visibility_off" },
 ];
 
 // 注册表本体。各算法模块 import register 往里塞。
@@ -114,15 +119,20 @@ export function register(op) {
   return op;
 }
 
+// 旧 op id 兼容映射：id 撤销后，深链（#/op=）/收藏（localStorage ebctf_favorites）/
+// 配方（recipes.js）里的旧 id 仍解析到承接 op。先例：hexView 深链迁移、
+// C7-QR qrDecodeReport 并入 qrDecode。
+const LEGACY_OP_IDS = { qrParse: "qrScanImage" };
+
 export function getOp(id) {
-  return _byId.get(id);
+  return _byId.get(id) || (LEGACY_OP_IDS[id] && _byId.get(LEGACY_OP_IDS[id])) || undefined;
 }
 
 export function opsByCat(catId) {
   return OPS.filter((o) => o.cat === catId);
 }
 
-// ============ 算法族（T380，恒烈 2026-09-03 拍板）============
+// ============ 算法族（T380，产品负责人 2026-09-03 拍板）============
 // 非对称等分类同算法族 op 太多（如 PGP 8 档），侧栏不逐条展开：聚合为「族显示名 ×N」一条，
 // 工作区内用族滑块换档。方案形态：每一档滑块 = 一个独立 op（族内 op 实现零改动），
 // 不是「单 op 多 mode」。族字段由各算法 op 声明：family = 族 id，familyLabel = 档位短名 key
@@ -135,10 +145,10 @@ export const FAMILY_NAMES = {
   sha: "SHA",
   shake: "SHAKE",
   pgp: "PGP / OpenPGP",
-  // T427 v2（恒烈 2026-09-08 拍板）：base64/base58 家族并入本尊，长尾仅保留 Unicode Base 4 项组
+  // T427 v2（产品负责人 2026-09-08 拍板）：base64/base58 家族并入本尊，长尾仅保留 Unicode Base 4 项组
   base64: "Base64 家族",
   base58: "Base58 家族",
-  // 恒烈 2026-09-08 特许 F1：base64steg/base32steg 自成一族「Base 隐写」，
+  // 产品负责人 2026-09-08 特许 F1：base64steg/base32steg 自成一族「Base 隐写」，
   // 解决「Base32 隐写在 Base64 族、Base32 本尊却独立」的错位（手法同源：padding 冗余位藏 offset）
   basesteg: "Base 隐写",
   unicodebase: "Unicode Base",
@@ -225,7 +235,7 @@ function runFirstParam(src) {
 }
 
 /**
- * 主输入框渲染模式推导（T399，恒烈 2026-09-04 拍板：无需主输入的 op 不再显示巨型输入框）。
+ * 主输入框渲染模式推导（T399，产品负责人 2026-09-04 拍板：无需主输入的 op 不再显示巨型输入框）。
  * 返回 "text"（显示主输入框）| "none"（隐藏，渲染层换细提示条）。
  * 优先级：显式 op.io 覆盖 > 静态推导 > 默认 text。
  * 静态推导：run-only（无 encode/decode）且 run 首参从未在函数体被引用 → none。

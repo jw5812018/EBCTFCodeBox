@@ -22,7 +22,7 @@
  *   kenny          — dCode code-kenny-southpark（2026-09 抓取核实）：M=0/P=1/F=2 三进制，
  *                    A=MMM … Z=FFP（值 0-25），FFF(26) 页面未分配——本实现作可选空格扩展档。
  *
- * 对拍与测试：资料/工程留存/T508/批1_古典A/test_batch1.mjs（dCode 双例 + 手推向量 + 往返 + 异常）。
+ * 对拍与测试：dCode 双例 + 手推向量 + 往返 + 异常（独立脚本可复跑）。
  * 本文件为自研实现；摩斯表复用 fancy.js（MORSE_REV/morseDecode），列移位复用 classic.js（columnarEncode/Decode）。
  */
 import { register } from "./registry.js";

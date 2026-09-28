@@ -28,6 +28,15 @@
 
 import { dtmfDecode, parseWavPcm, goertzel as goertzelDtmf, ROW, COL } from "./dtmfWav.js";
 import { parseWav, readPcmSamples, goertzel } from "./audiostego.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // flag 正则（照 section schema 契约，与 imageAnalysis.js 一致）
 const FLAG_RE = /(flag|ctf|key)\{[^}]+\}/i;
@@ -175,7 +184,7 @@ function tryDecodeText(bytes) {
   if (end === 0) return null;
   const trimmed = end < bytes.length ? bytes.subarray(0, end) : bytes;
   try {
-    const s = new TextDecoder("utf-8", { fatal: true }).decode(trimmed);
+    const s = _decodeUtf8Fatal(trimmed);
     let ctrl = 0;
     for (const ch of s) {
       const c = ch.codePointAt(0);

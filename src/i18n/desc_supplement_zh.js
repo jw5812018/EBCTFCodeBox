@@ -10,7 +10,7 @@ export default {
   "op.base16.desc": "十六进制编码，每字节用两个十六进制字符表示，支持自定义码表与大写/空格分隔。",
   "op.base32.desc": "RFC 4648 标准的 Base32 编码，5 位分组，支持自定义码表。",
   "op.base36.desc": "把整段字节视为大整数，按 0-9a-z 字符表转换为 36 进制字符串。",
-  "op.base45.desc": "RFC 9285 Base45 编码，2 字节映射为 3 字符，QR 码常用。",
+  "op.base45.desc": "RFC 9285 Base45 编码，2 字节映射为 3 字符，QR 码常用。空格是值 36 的数据字符（非分隔符）；三字符组解码值 > 65535 按 RFC §6 MUST 拒绝。",
   "op.base58.desc": "Base58 编码（Bitcoin 字母表），去掉易混淆字符，支持自定义码表。",
   "op.base62.desc": "Base62 编码，使用 0-9A-Za-z 字符集，支持自定义码表。",
   "op.base64.desc": "标准 Base64 编码，支持 URL-safe 变体与自定义码表。",
@@ -75,7 +75,7 @@ export default {
   "op.lsbImage.desc": "LSB 像素隐写：将数据写入图像像素最低有效位，前 32 位存长度，支持 R/G/B/A 通道选择。",
 
  // ---- fancy 花式 / CTF 编码 ----
-  "op.morse.desc": "摩斯电码（ITU-R M.1677）：字母/数字/标点映射为点和划，用 / 分词。",
+  "op.morse.desc": "摩斯电码（ITU-R M.1677）：字母/数字/标点映射为点和划，用 / 分词。码表含少量非 ITU 扩展标点（! ; & _ $ 与 { } * # %，其中 & 与 % 与 ITU 的 prosign 同形但语义不同）；既非点划也非表内码的 token 整段忽略。",
   "op.bacon.desc": "培根密码：每字母编码为 5 位 a/b 串，支持 24 字母版（I=J, U=V）与 26 字母版。",
   "op.railFence.desc": "栅栏密码：W 型 zigzag 沿栏数写入后逐行读取，参数为栏数。",
   "op.caesar.desc": "凯撒密码：字母按指定位移量移位，加密 +shift、解密 -shift。",

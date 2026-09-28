@@ -14,10 +14,11 @@
  * 注册进 registry，cat:'base'。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 import { streamDecompress, streamCompress } from "./compress.js"; // v0.1.5：安全流（超时+纯JS兜底）
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 注：本文件已无「有损字节→文本」的出口——所有 decode 出口走 finishBytesDecode（见 ./bytesIo.js）。
 const cp = (n) => String.fromCodePoint(n);
 
 // ============ 同步 SHA-256（base58check 校验用，FIPS 180-4，照抄 baseExtra.js）============
@@ -111,7 +112,8 @@ function radixNDecodeBytes(text, dict) {
 const B58_DICT = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function base58CheckEncode(text, p) {
   const D = (p && p.dict) || B58_DICT;
-  const payload = te(text);
+  // 字节直通：Base58Check 的载荷是真字节（比特币地址语义），上游真字节直接编。
+  const payload = (p && p.rawBytes) || te(text);
   const hash = sha256Bytes(sha256Bytes(payload));
   const full = new Uint8Array(payload.length + 4);
   full.set(payload, 0);
@@ -126,7 +128,7 @@ function base58CheckDecode(text, p) {
   const checksum = full.slice(full.length - 4);
   const expect = sha256Bytes(sha256Bytes(payload)).slice(0, 4);
   for (let i = 0; i < 4; i++) if (checksum[i] !== expect[i]) throw new Error("base58check: 校验失败");
-  return td(payload);
+  return finishBytesDecode(payload, { textMode: "hex", name: "base58check" });
 }
 
 // ============ radix64（./A-Za-z0-9 crypt 表，照抄 baseExtra.js RADIX64_DICT）============
@@ -142,7 +144,7 @@ function base64WithDict(bytes, dict) {
   }
   return out;
 }
-function base64DecodeWithDict(text, dict) {
+function base64DecodeWithDict(text, dict, name) {
   const s = text.replace(/[^\x21-\x7e]/g, "");
   let bits = 0, val = 0;
   const out = [];
@@ -152,10 +154,11 @@ function base64DecodeWithDict(text, dict) {
     val = (val << 6) | idx; bits += 6;
     if (bits >= 8) { bits -= 8; out.push((val >> bits) & 0xff); }
   }
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "name" });
 }
-const radix64Encode = (t) => base64WithDict(te(t), RADIX64_DICT);
-const radix64Decode = (t) => base64DecodeWithDict(t, RADIX64_DICT);
+// 字节直通：crypt 表编码对象是真字节。
+const radix64Encode = (t, p) => base64WithDict((p && p.rawBytes) || te(t), RADIX64_DICT);
+const radix64Decode = (t) => base64DecodeWithDict(t, RADIX64_DICT, "radix64");
 
 // ============ base69（pshihn 7 字节分块，照抄 codec.js B69）============
 const B69 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-*<>|";
@@ -165,7 +168,8 @@ function byteToBase69Char(byte, D) {
 }
 function base69Encode(text, p) {
   const D = (p && p.dict) || B69;
-  const bytes = te(text);
+  // 字节直通：base69 本是二进制分块编码，上游真字节直接编。
+  const bytes = (p && p.rawBytes) || te(text);
   let out = "";
   for (let i = 0; i < bytes.length; i += B69_CHUNK) {
     const chunk = bytes.slice(i, i + B69_CHUNK);
@@ -174,41 +178,51 @@ function base69Encode(text, p) {
       out += byteToBase69Char(parseInt(bin.slice(j, j + B69_CHUNK).padEnd(B69_CHUNK, "0"), 2), D);
     }
   }
-  const pad = B69_CHUNK - (bytes.length % B69_CHUNK); // 1..7，恒 >0，对齐 ToolsFx
-  out += "AA".repeat(pad - 1) + pad + "=";
+  // 长度恰为 7 的倍数时不附标记（pad=0）；否则 pad = 7 - (L % 7)，取 1..6
+  const pad = (B69_CHUNK - (bytes.length % B69_CHUNK)) % B69_CHUNK;
+  if (pad) out += "AA".repeat(pad - 1) + pad + "=";
   return out;
 }
 function base69Decode(text, p) {
   const D = (p && p.dict) || B69;
-  const s = text.trim();
-  if (s.length < 2) throw new Error("base69: 输入过短");
- // 读 padding 标记 "N="（最后一对），N = 7 - (L % 7)（L%7==0 时 N=7）
+  let s = text.trim();   // 旧 7= 尾形态需截尾，故用 let
+  if (!s) return "";
+ // 规范形态：总长恒为 16 的倍数（每 7 字节 → 8 对字符）。
+ // 兼容形态（历史产品产物）：长度恰为 7 字节倍数时旧实现附 pad=7，
+ //   即尾部 "AAAAAAAAAAAA7="（"AA"×6 + "7="，共 14 字符），故总长 ≡ 14 (mod 16)。
+ //   只认这一种严格形态；其余非 16 倍数一律拒绝（不接受畸形 padding）。
+  const LEGACY_TAIL = "AA".repeat(6) + "7=";
+  if (s.length % 16 !== 0) {
+    if (s.length > LEGACY_TAIL.length && s.length % 16 === 14 && s.endsWith(LEGACY_TAIL))
+      s = s.slice(0, -LEGACY_TAIL.length);
+    else throw new Error("base69: 编码长度须为 16 的倍数（旧 7= 尾形态除外，且不得只有尾无数据体）");
+  }
+ // 尾部 "N=" 标记（N = 补齐字节数 1..6）；无标记 = 长度恰为 7 的倍数，无尾部补齐
   const lastPair = s.slice(-2);
-  if (!lastPair.includes("=")) throw new Error("base69: 缺少 padding 标记");
-  const padN = parseInt(lastPair[0], 10);
-  if (isNaN(padN) || padN < 1 || padN > 7) throw new Error("base69: 非法 padding " + lastPair);
- // 总字符对数（含 "AA" padding，不含 "N="）= (s.length - 2) / 2
- // "AA" padding 对数 = padN - 1；数据字符对数 = 总对数 - (padN - 1)
-  const totalPairs = (s.length - 2) / 2;
-  const aaPadPairs = padN - 1;
-  const dataPairs = totalPairs - aaPadPairs;
- // 只解码前 dataPairs 对（数据），后续 "AA" padding 值为 0 跳过
+  let padN = 0;
+  if (lastPair.includes("=")) {
+    padN = parseInt(lastPair[0], 10);
+    if (isNaN(padN) || padN < 1 || padN > 6) throw new Error("base69: 非法 padding " + lastPair);
+  }
+  const body = padN ? s.slice(0, -2) : s;
+ // 有标记时，尾部 (padN-1) 对是补齐用的 "AA" 占位，不参与解码
+  const dataPairs = body.length / 2 - (padN ? padN - 1 : 0);
   let bin = "";
   for (let i = 0; i < dataPairs; i++) {
-    const pair = s.slice(i * 2, i * 2 + 2);
+    const pair = body.slice(i * 2, i * 2 + 2);
     const val = 69 * D.indexOf(pair[1]) + D.indexOf(pair[0]);
     bin += val.toString(2).padStart(B69_CHUNK, "0");
   }
  // 原始字节数 L = floor(dataPairs * 7 / 8)（encode 时 padEnd 补的零位在末尾，被 floor 丢弃）
   const out = [];
   for (let i = 0; i + 8 <= bin.length; i += 8) out.push(parseInt(bin.slice(i, i + 8), 2));
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "base69" });
 }
 
 // ============ 字典式 Base85（z85 / IPv6，照抄 codec.js）============
 const B85_Z85 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#";
 const B85_IPV6 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
-function base85DictDecode(text, dict) {
+function base85DictDecode(text, dict, name) {
   const s = text.trim().replace(/\s/g, "");
   const out = [];
   for (let i = 0; i < s.length; i += 5) {
@@ -229,10 +243,11 @@ function base85DictDecode(text, dict) {
     ];
     for (let k = 0; k < count; k++) out.push(b[k]);
   }
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "name" });
 }
-function base85DictEncode(text, dict) {
-  const bytes = te(text);
+function base85DictEncode(text, dict, p) {
+  // 字节直通：Z85/RFC1924 均为 4 字节 → 5 字符的定长二进制编码。
+  const bytes = (p && p.rawBytes) || te(text);
   let out = "";
   for (let i = 0; i < bytes.length; i += 4) {
     const chunk = bytes.slice(i, i + 4);
@@ -245,10 +260,10 @@ function base85DictEncode(text, dict) {
   }
   return out;
 }
-const z85Encode = (t) => base85DictEncode(t, B85_Z85);
-const z85Decode = (t, p) => base85DictDecode(t, (p && p.dict && p.dict.length === 85) ? p.dict : B85_Z85);
-const base85Ipv6Encode = (t) => base85DictEncode(t, B85_IPV6);
-const base85Ipv6Decode = (t, p) => base85DictDecode(t, (p && p.dict && p.dict.length === 85) ? p.dict : B85_IPV6);
+const z85Encode = (t, p) => base85DictEncode(t, B85_Z85, p);
+const z85Decode = (t, p) => base85DictDecode(t, (p && p.dict && p.dict.length === 85) ? p.dict : B85_Z85, "z85");
+const base85Ipv6Encode = (t, p) => base85DictEncode(t, B85_IPV6, p);
+const base85Ipv6Decode = (t, p) => base85DictDecode(t, (p && p.dict && p.dict.length === 85) ? p.dict : B85_IPV6, "base85ipv6");
 
 // ============ base2048（qntm 11-bit，码表照抄 bigBase.js B2048_11/B2048_3）============
 const B2048_11 = [56,57,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,198,208,216,222,223,230,240,248,254,272,273,294,295,305,312,321,322,330,331,338,339,358,359,384,385,386,387,388,389,390,391,392,393,394,395,396,397,398,399,400,401,402,403,404,405,406,407,408,409,410,411,412,413,414,415,418,419,420,421,422,423,424,425,426,427,428,429,430,433,434,435,436,437,438,439,440,441,442,443,444,445,446,447,448,449,450,451,477,484,485,502,503,540,541,544,545,546,547,548,549,564,565,566,567,568,569,570,571,572,573,574,575,576,577,578,579,580,581,582,583,584,585,586,587,588,589,590,591,592,593,594,595,596,597,598,599,600,601,602,603,604,605,606,607,608,609,610,611,612,613,614,615,616,617,618,619,620,621,622,623,624,625,626,627,628,629,630,631,632,633,634,635,636,637,638,639,640,641,642,643,644,645,646,647,648,649,650,651,652,653,654,655,656,657,658,659,660,661,662,663,664,665,666,667,668,669,670,671,672,673,674,675,676,677,678,679,680,681,682,683,684,685,686,687,880,881,882,883,886,887,891,892,893,895,913,914,915,916,917,918,919,920,921,922,923,924,925,926,927,928,929,931,932,933,934,935,936,937,945,946,947,948,949,950,951,952,953,954,955,956,957,958,959,960,961,962,963,964,965,966,967,968,969,975,983,984,985,986,987,988,989,990,991,992,993,994,995,996,997,998,999,1000,1001,1002,1003,1004,1005,1006,1007,1011,1015,1016,1018,1019,1020,1021,1022,1023,1026,1028,1029,1030,1032,1033,1034,1035,1039,1040,1041,1042,1043,1044,1045,1046,1047,1048,1050,1051,1052,1053,1054,1055,1056,1057,1058,1059,1060,1061,1062,1063,1064,1065,1066,1067,1068,1069,1070,1071,1072,1073,1074,1075,1076,1077,1078,1079,1080,1082,1083,1084,1085,1086,1087,1088,1089,1090,1091,1092,1093,1094,1095,1096,1097,1098,1099,1100,1101,1102,1103,1106,1108,1109,1110,1112,1113,1114,1115,1119,1120,1121,1122,1123,1124,1125,1126,1127,1128,1129,1130,1131,1132,1133,1134,1135,1136,1137,1138,1139,1140,1141,1144,1145,1146,1147,1148,1149,1150,1151,1152,1153,1162,1163,1164,1165,1166,1167,1168,1169,1170,1171,1172,1173,1174,1175,1176,1177,1178,1179,1180,1181,1182,1183,1184,1185,1186,1187,1188,1189,1190,1191,1192,1193,1194,1195,1196,1197,1198,1199,1200,1201,1202,1203,1204,1205,1206,1207,1208,1209,1210,1211,1212,1213,1214,1215,1216,1219,1220,1221,1222,1223,1224,1225,1226,1227,1228,1229,1230,1231,1236,1237,1240,1241,1248,1249,1256,1257,1270,1271,1274,1275,1276,1277,1278,1279,1280,1281,1282,1283,1284,1285,1286,1287,1288,1289,1290,1291,1292,1293,1294,1295,1296,1297,1298,1299,1300,1301,1302,1303,1304,1305,1306,1307,1308,1309,1310,1311,1312,1313,1314,1315,1316,1317,1318,1319,1320,1321,1322,1323,1324,1325,1326,1327,1329,1330,1331,1332,1333,1334,1335,1336,1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348,1349,1350,1351,1352,1353,1354,1355,1356,1357,1358,1359,1360,1361,1362,1363,1364,1365,1366,1377,1378,1379,1380,1381,1382,1383,1384,1385,1386,1387,1388,1389,1390,1391,1392,1393,1394,1395,1396,1397,1398,1399,1400,1401,1402,1403,1404,1405,1406,1407,1408,1409,1410,1411,1412,1413,1414,1488,1489,1490,1491,1492,1493,1494,1495,1496,1497,1498,1499,1500,1501,1502,1503,1504,1505,1506,1507,1508,1509,1510,1511,1512,1513,1514,1520,1521,1522,1568,1569,1575,1576,1577,1578,1579,1580,1581,1582,1583,1584,1585,1586,1587,1588,1589,1590,1591,1592,1593,1594,1595,1596,1597,1598,1599,1601,1602,1603,1604,1605,1606,1607,1608,1609,1610,1632,1633,1634,1635,1636,1637,1638,1639,1640,1641,1646,1647,1649,1650,1651,1652,1657,1658,1659,1660,1661,1662,1663,1664,1665,1666,1667,1668,1669,1670,1671,1672,1673,1674,1675,1676,1677,1678,1679,1680,1681,1682,1683,1684,1685,1686,1687,1688,1689,1690,1691,1692,1693,1694,1695,1696,1697,1698,1699,1700,1701,1702,1703,1704,1705,1706,1707,1708,1709,1710,1711,1712,1713,1714,1715,1716,1717,1718,1719,1720,1721,1722,1723,1724,1725,1726,1727,1729,1731,1732,1733,1734,1735,1736,1737,1738,1739,1740,1741,1742,1743,1744,1745,1746,1749,1774,1775,1776,1777,1778,1779,1780,1781,1782,1783,1784,1785,1786,1787,1788,1791,1808,1810,1811,1812,1813,1814,1815,1816,1817,1818,1819,1820,1821,1822,1823,1824,1825,1826,1827,1828,1829,1830,1831,1832,1833,1834,1835,1836,1837,1838,1839,1869,1870,1871,1872,1873,1874,1875,1876,1877,1878,1879,1880,1881,1882,1883,1884,1885,1886,1887,1888,1889,1890,1891,1892,1893,1894,1895,1896,1897,1898,1899,1900,1901,1902,1903,1904,1905,1906,1907,1908,1909,1910,1911,1912,1913,1914,1915,1916,1917,1918,1919,1920,1921,1922,1923,1924,1925,1926,1927,1928,1929,1930,1931,1932,1933,1934,1935,1936,1937,1938,1939,1940,1941,1942,1943,1944,1945,1946,1947,1948,1949,1950,1951,1952,1953,1954,1955,1956,1957,1969,1984,1985,1986,1987,1988,1989,1990,1991,1992,1993,1994,1995,1996,1997,1998,1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022,2023,2024,2025,2026,2048,2049,2050,2051,2052,2053,2054,2055,2056,2057,2058,2059,2060,2061,2062,2063,2064,2065,2066,2067,2068,2069,2112,2113,2114,2115,2116,2117,2118,2119,2120,2121,2122,2123,2124,2125,2126,2127,2128,2129,2130,2131,2132,2133,2134,2135,2136,2144,2145,2146,2147,2148,2149,2150,2151,2152,2153,2154,2208,2209,2210,2211,2212,2213,2214,2215,2216,2217,2218,2219,2220,2221,2222,2223,2224,2225,2226,2227,2228,2230,2231,2232,2233,2234,2235,2236,2237,2308,2309,2310,2311,2312,2313,2314,2315,2316,2317,2318,2319,2320,2321,2322,2323,2324,2325,2326,2327,2328,2329,2330,2331,2332,2333,2334,2335,2336,2337,2338,2339,2340,2341,2342,2343,2344,2346,2347,2348,2349,2350,2351,2352,2354,2355,2357,2358,2359,2360,2361,2365,2384,2400,2401,2406,2407,2408,2409,2410,2411,2412,2413,2414,2415,2418,2419,2420,2421,2422,2423,2424,2425,2426,2427,2428,2429,2430,2431,2432,2437,2438,2439,2440,2441,2442,2443,2444,2447,2448,2451,2452,2453,2454,2455,2456,2457,2458,2459,2460,2461,2462,2463,2464,2465,2466,2467,2468,2469,2470,2471,2472,2474,2475,2476,2477,2478,2479,2480,2482,2486,2487,2488,2489,2493,2510,2528,2529,2534,2535,2536,2537,2538,2539,2540,2541,2542,2543,2544,2545,2548,2549,2550,2551,2552,2553,2556,2565,2566,2567,2568,2569,2570,2575,2576,2579,2580,2581,2582,2583,2584,2585,2586,2587,2588,2589,2590,2591,2592,2593,2594,2595,2596,2597,2598,2599,2600,2602,2603,2604,2605,2606,2607,2608,2610,2613,2616,2617,2652,2662,2663,2664,2665,2666,2667,2668,2669,2670,2671,2674,2675,2676,2693,2694,2695,2696,2697,2698,2699,2700,2701,2703,2704,2705,2707,2708,2709,2710,2711,2712,2713,2714,2715,2716,2717,2718,2719,2720,2721,2722,2723,2724,2725,2726,2727,2728,2730,2731,2732,2733,2734,2735,2736,2738,2739,2741,2742,2743,2744,2745,2749,2768,2784,2785,2790,2791,2792,2793,2794,2795,2796,2797,2798,2799,2809,2821,2822,2823,2824,2825,2826,2827,2828,2831,2832,2835,2836,2837,2838,2839,2840,2841,2842,2843,2844,2845,2846,2847,2848,2849,2850,2851,2852,2853,2854,2855,2856,2858,2859,2860,2861,2862,2863,2864,2866,2867,2869,2870,2871,2872,2873,2877,2911,2912,2913,2918,2919,2920,2921,2922,2923,2924,2925,2926,2927,2929,2930,2931,2932,2933,2934,2935,2947,2949,2950,2951,2952,2953,2954,2958,2959,2960,2962,2963,2965,2969,2970,2972,2974,2975,2979,2980,2984,2985,2986,2990,2991,2992,2993,2994,2995,2996,2997,2998,2999,3000,3001,3024,3046,3047,3048,3049,3050,3051,3052,3053,3054,3055,3056,3057,3058,3077,3078,3079,3080,3081,3082,3083,3084,3086,3087,3088,3090,3091,3092,3093,3094,3095,3096,3097,3098,3099,3100,3101,3102,3103,3104,3105,3106,3107,3108,3109,3110,3111,3112,3114,3115,3116,3117,3118,3119,3120,3121,3122,3123,3124,3125,3126,3127,3128,3129,3133,3160,3161,3162,3168,3169,3174,3175,3176,3177,3178,3179,3180,3181,3182,3183,3192,3193,3194,3195,3196,3197,3198,3200,3205,3206,3207,3208,3209,3210,3211,3212,3214,3215,3216,3218,3219,3220,3221,3222,3223,3224,3225,3226,3227,3228,3229,3230,3231,3232,3233,3234,3235,3236,3237,3238,3239,3240,3242,3243,3244,3245,3246,3247,3248,3249,3250,3251,3253,3254,3255,3256,3257,3261,3294,3296,3297,3302,3303,3304,3305,3306,3307,3308,3309,3310,3311,3313,3314,3333,3334,3335,3336,3337,3338,3339,3340,3342,3343,3344,3346,3347,3348,3349,3350,3351,3352,3353,3354,3355,3356,3357,3358,3359,3360,3361,3362,3363,3364,3365,3366,3367,3368,3369,3370,3371,3372,3373,3374,3375,3376,3377,3378,3379,3380,3381,3382,3383,3384,3385,3386,3389,3406,3412,3413,3414,3416,3417,3418,3419,3420,3421,3422,3423,3424,3425,3430,3431,3432,3433,3434,3435,3436,3437,3438,3439,3440,3441,3442,3443,3444,3445,3446,3447,3448,3450,3451,3452,3453,3454,3455,3461,3462,3463,3464,3465,3466,3467,3468,3469,3470,3471,3472,3473,3474,3475,3476,3477,3478,3482,3483,3484,3485,3486,3487,3488,3489,3490,3491,3492,3493,3494,3495,3496,3497,3498,3499,3500,3501,3502,3503,3504,3505,3507,3508,3509,3510,3511,3512,3513,3514,3515,3517,3520,3521,3522,3523,3524,3525,3526,3558,3559,3560,3561,3562,3563,3564,3565,3566,3567,3585,3586,3587,3588,3589,3590,3591,3592,3593,3594,3595,3596,3597,3598,3599,3600,3601,3602,3603,3604,3605,3606,3607,3608,3609,3610,3611,3612,3613,3614,3615,3616,3617,3618,3619,3620,3621,3622,3623,3624,3625,3626,3627,3628,3629,3630,3631,3632,3634,3648,3649,3650,3651,3652,3653,3664,3665,3666,3667,3668,3669,3670,3671,3672,3673,3713,3714,3716,3719,3720,3722,3725,3732,3733,3734,3735,3737,3738,3739,3740,3741,3742,3743,3745,3746,3747,3749,3751,3754,3755,3757,3758,3759,3760,3762,3773,3776,3777,3778,3779,3780,3792,3793,3794,3795,3796,3797,3798,3799,3800,3801,3806,3807,3840,3872,3873,3874,3875,3876,3877,3878,3879,3880,3881,3882,3883,3884,3885,3886,3887,3888,3889,3890,3891,3904,3905,3906,3908,3909,3910,3911,3913,3914,3915,3916,3918,3919,3920,3921,3923,3924,3925,3926,3928,3929,3930,3931,3933,3934,3935,3936,3937,3938,3939,3940,3941,3942,3943,3944,3946,3947,3948,3976,3977,3978,3979,3980,4096,4097,4098,4099,4100,4101,4102,4103,4104,4105,4106,4107,4108,4109,4110,4111,4112,4113,4114,4115,4116,4117,4118,4119,4120,4121,4122,4123,4124,4125,4126,4127,4128,4129,4130,4131,4132,4133,4135,4136,4137,4138,4159,4160,4161,4162,4163,4164,4165,4166,4167,4168,4169,4176,4177,4178,4179,4180,4181];
@@ -258,8 +273,9 @@ const B2048_D = new Map();
 for (const [bits, chars] of Object.entries(B2048_E)) {
   chars.forEach((ch, i) => B2048_D.set(ch, [Number(bits), i]));
 }
-function base2048Encode(text) {
-  const bytes = te(text);
+function base2048Encode(text, p) {
+  // 字节直通：11-bit 位流编的是原始字节。
+  const bytes = (p && p.rawBytes) || te(text);
   let out = "", z = 0, numZBits = 0;
   for (const byte of bytes) {
     for (let j = 7; j >= 0; j--) {
@@ -287,15 +303,16 @@ function base2048Decode(text) {
       if (numUint8Bits === 8) { out.push(uint8 & 0xff); uint8 = 0; numUint8Bits = 0; }
     }
   }
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "base2048" });
 }
 
 // ============ base65536（每 2 字节 1 CJK，码表照抄 bigBase.js B65_START）============
 const B65_START = {"0":13312,"1":13568,"2":13824,"3":14080,"4":14336,"5":14592,"6":14848,"7":15104,"8":15360,"9":15616,"10":15872,"11":16128,"12":16384,"13":16640,"14":16896,"15":17152,"16":17408,"17":17664,"18":17920,"19":18176,"20":18432,"21":18688,"22":18944,"23":19200,"24":19456,"25":19968,"26":20224,"27":20480,"28":20736,"29":20992,"30":21248,"31":21504,"32":21760,"33":22016,"34":22272,"35":22528,"36":22784,"37":23040,"38":23296,"39":23552,"40":23808,"41":24064,"42":24320,"43":24576,"44":24832,"45":25088,"46":25344,"47":25600,"48":25856,"49":26112,"50":26368,"51":26624,"52":26880,"53":27136,"54":27392,"55":27648,"56":27904,"57":28160,"58":28416,"59":28672,"60":28928,"61":29184,"62":29440,"63":29696,"64":29952,"65":30208,"66":30464,"67":30720,"68":30976,"69":31232,"70":31488,"71":31744,"72":32000,"73":32256,"74":32512,"75":32768,"76":33024,"77":33280,"78":33536,"79":33792,"80":34048,"81":34304,"82":34560,"83":34816,"84":35072,"85":35328,"86":35584,"87":35840,"88":36096,"89":36352,"90":36608,"91":36864,"92":37120,"93":37376,"94":37632,"95":37888,"96":38144,"97":38400,"98":38656,"99":38912,"100":39168,"101":39424,"102":39680,"103":39936,"104":40192,"105":40448,"106":41216,"107":41472,"108":41728,"109":42240,"110":67072,"111":73728,"112":73984,"113":74240,"114":77824,"115":78080,"116":78336,"117":78592,"118":82944,"119":83200,"120":92160,"121":92416,"122":131072,"123":131328,"124":131584,"125":131840,"126":132096,"127":132352,"128":132608,"129":132864,"130":133120,"131":133376,"132":133632,"133":133888,"134":134144,"135":134400,"136":134656,"137":134912,"138":135168,"139":135424,"140":135680,"141":135936,"142":136192,"143":136448,"144":136704,"145":136960,"146":137216,"147":137472,"148":137728,"149":137984,"150":138240,"151":138496,"152":138752,"153":139008,"154":139264,"155":139520,"156":139776,"157":140032,"158":140288,"159":140544,"160":140800,"161":141056,"162":141312,"163":141568,"164":141824,"165":142080,"166":142336,"167":142592,"168":142848,"169":143104,"170":143360,"171":143616,"172":143872,"173":144128,"174":144384,"175":144640,"176":144896,"177":145152,"178":145408,"179":145664,"180":145920,"181":146176,"182":146432,"183":146688,"184":146944,"185":147200,"186":147456,"187":147712,"188":147968,"189":148224,"190":148480,"191":148736,"192":148992,"193":149248,"194":149504,"195":149760,"196":150016,"197":150272,"198":150528,"199":150784,"200":151040,"201":151296,"202":151552,"203":151808,"204":152064,"205":152320,"206":152576,"207":152832,"208":153088,"209":153344,"210":153600,"211":153856,"212":154112,"213":154368,"214":154624,"215":154880,"216":155136,"217":155392,"218":155648,"219":155904,"220":156160,"221":156416,"222":156672,"223":156928,"224":157184,"225":157440,"226":157696,"227":157952,"228":158208,"229":158464,"230":158720,"231":158976,"232":159232,"233":159488,"234":159744,"235":160000,"236":160256,"237":160512,"238":160768,"239":161024,"240":161280,"241":161536,"242":161792,"243":162048,"244":162304,"245":162560,"246":162816,"247":163072,"248":163328,"249":163584,"250":163840,"251":164096,"252":164352,"253":164608,"254":164864,"255":165120,"-1":5376};
 const B65_REV = {};
 for (const [b2, start] of Object.entries(B65_START)) B65_REV[start] = Number(b2);
-function base65536Encode(text) {
-  const bytes = te(text);
+function base65536Encode(text, p) {
+  // 字节直通：每 2 字节映射 1 字符，编的是原始字节。
+  const bytes = (p && p.rawBytes) || te(text);
   let out = "";
   for (let i = 0; i < bytes.length; i += 2) {
     const b1 = bytes[i] & 0xff;
@@ -314,7 +331,7 @@ function base65536Decode(text) {
     if (b2 === undefined || b2 === -1) out.push(b1);
     else { out.push(b1); out.push(b2 & 0xff); }
   }
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "base65536" });
 }
 
 // ============ ecoji（1024 emoji 表 + padding，码表照抄 bigBase.js ECO_MAP/ECO_PAD/ECO_PAD4）============
@@ -324,8 +341,9 @@ const ECO_PAD4 = [9884, 127949, 128209, 128587];
 const ECO_REV = new Map();
 ECO_MAP.forEach((c, i) => ECO_REV.set(c, i));
 const ecojiRevGetOrZero = (k) => (ECO_REV.has(k) ? ECO_REV.get(k) : 0);
-function ecojiEncode(text) {
-  const bytes = te(text);
+function ecojiEncode(text, p) {
+  // 字节直通：ecoji 本是 5 字节 → 4 emoji 的二进制编码。
+  const bytes = (p && p.rawBytes) || te(text);
   let out = "";
   for (let i = 0; i < bytes.length; i += 5) {
     const chunk = bytes.slice(i, i + 5);
@@ -382,7 +400,7 @@ function ecojiDecode(text) {
     ];
     for (let k = 0; k < len; k++) out.push(bytes[k]);
   }
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "ecoji" });
 }
 
 // ============ base64steg（base64 补位隐写）============
@@ -426,7 +444,7 @@ function base64StegDecode(text) {
   if (!binStr) return "";
   const out = [];
   for (let i = 0; i + 8 <= binStr.length; i += 8) out.push(parseInt(binStr.slice(i, i + 8), 2));
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "base64steg" });
 }
 function base64StegEncode(text) {
   const flag = text;
@@ -513,7 +531,7 @@ function base32StegDecode(text) {
   if (!binStr) return "";
   const out = [];
   for (let i = 0; i + 8 <= binStr.length; i += 8) out.push(parseInt(binStr.slice(i, i + 8), 2));
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "base32steg" });
 }
 function base32StegEncode(text) {
   const binStr = [...te(text)].map((b) => b.toString(2).padStart(8, "0")).join("");
@@ -551,7 +569,8 @@ function base32StegEncode(text) {
 function base64DictEncode(text, p) {
   const key = (p && p.key) || B64_STD;
   if (key.length !== 64) throw new Error("字典必须 64 字符");
-  const std = _b64EncodeStd(te(text));
+  // 字节直通：先按标准 base64 编真字节，再做字典替换。
+  const std = _b64EncodeStd((p && p.rawBytes) || te(text));
   let out = "";
   for (const ch of std) {
     if (ch === "=") out += "=";
@@ -575,7 +594,7 @@ function base64DictDecode(text, p) {
     }
   }
   if (res.length % 4 !== 0) res += "=".repeat(4 - (res.length % 4));
-  return td(_b64DecodeStd(res));
+  return finishBytesDecode(_b64DecodeStd(res), { textMode: "hex", name: "base64dict" });
 }
 
 // ============ multilineBase64（多行 base64 解码）============
@@ -583,7 +602,8 @@ function base64DictDecode(text, p) {
 // encode 端：把文本 b64 编码后按行切分（参数 lineLen，默认 76）。
 function multilineBase64Encode(text, p) {
   const lineLen = Math.max(1, Number((p && p.lineLen) || 76));
-  const std = _b64EncodeStd(te(text));
+  // 字节直通：先按标准 base64 编真字节，再按行切分。
+  const std = _b64EncodeStd((p && p.rawBytes) || te(text));
   const lines = [];
   for (let i = 0; i < std.length; i += lineLen) lines.push(std.slice(i, i + lineLen));
   return lines.join("\n");
@@ -605,7 +625,7 @@ function multilineBase64Decode(text) {
     }
   }
  // 拼接所有字节后一次性 UTF-8 解码（避免行边界切断多字节字符）
-  return td(new Uint8Array(allBytes));
+  return finishBytesDecode(new Uint8Array(allBytes), { textMode: "hex", name: "multilineBase64" });
 }
 
 // ============ base64decompress（zlib + base64）============
@@ -634,10 +654,11 @@ function _b64ToBytes(text) {
 async function base64DecompressDecode(text) {
   const bytes = _b64ToBytes(text);
   const out = await _inflate(bytes);
-  return td(out);
+  return finishBytesDecode(out, { textMode: "hex", name: "base64decompress" });
 }
-async function base64DecompressEncode(text) {
-  const bytes = te(text);
+async function base64DecompressEncode(text, p) {
+  // 字节直通：压缩对象是真字节。
+  const bytes = (p && p.rawBytes) || te(text);
   const zipped = await _deflate(bytes);
   return _bytesToB64(zipped);
 }
@@ -648,48 +669,64 @@ register({
   id: "base58check", cat: "base", name: "Base58Check", desc: "Base58 + 双 SHA-256 4 字节校验（比特币地址校验）",
   family: "base58", familyLabel: "base58check",
   params: [{ key: "dict", label: "自定义码表", type: "text", default: B58_DICT, placeholder: B58_DICT }],
+  // encode 方向吃字节（载荷为原始字节）；decode 输入是 Base58 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base58CheckEncode, decode: base58CheckDecode,
   detect: () => 0,
 });
 register({
   id: "radix64", cat: "base", name: "Radix64 (crypt)", desc: "密码 crypt 表 ./A-Za-z0-9（位打包，无 padding）",
   family: "base64", familyLabel: "radix64",
+  // encode 方向吃字节；decode 输入是 crypt 表文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: radix64Encode, decode: radix64Decode,
   detect: () => 0,
 });
 register({
   id: "base69", cat: "base", name: "Base69", desc: "pshihn 7 字节分块（含 padding 标记）",
   params: [{ key: "dict", label: "自定义码表", type: "text", default: B69, placeholder: B69 }],
+  // encode 方向吃字节；decode 输入是 base69 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base69Encode, decode: base69Decode,
   detect: () => 0,
 });
 register({
   id: "z85", cat: "base", name: "Z85 (ZeroMQ)", desc: "ZeroMQ Base85 字典式（4 字节 → 5 字符）",
   params: [{ key: "dict", label: "自定义码表（85 字符）", type: "text", default: B85_Z85, placeholder: B85_Z85 }],
+  // encode 方向吃字节；decode 输入是 Z85 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: z85Encode, decode: z85Decode,
   detect: () => 0,
 });
 register({
   id: "base85ipv6", cat: "base", name: "Base85 IPv6", desc: "IPv6 码表 Base85 变体（RFC 1924）",
   params: [{ key: "dict", label: "自定义码表（85 字符）", type: "text", default: B85_IPV6, placeholder: B85_IPV6 }],
+  // encode 方向吃字节；decode 输入是 RFC 1924 码表文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base85Ipv6Encode, decode: base85Ipv6Decode,
   detect: () => 0,
 });
 register({
   id: "base2048", cat: "base", name: "Base2048", desc: "qntm 11-bit 编码（Unicode 紧凑表示）",
   family: "unicodebase", familyLabel: "base2048",
+  // encode 方向吃字节；decode 输入是 Unicode 紧凑文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base2048Encode, decode: base2048Decode,
   detect: () => 0,
 });
 register({
   id: "base65536", cat: "base", name: "Base65536", desc: "每 2 字节 → 1 CJK 字符（Unicode 紧凑表示）",
   family: "unicodebase", familyLabel: "base65536",
+  // encode 方向吃字节；decode 输入是 CJK 紧凑文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base65536Encode, decode: base65536Decode,
   detect: () => 0,
 });
 register({
   id: "ecoji", cat: "base", name: "Ecoji", desc: "1024 emoji 表 + padding（5 字节 → 4 emoji）",
   family: "unicodebase", familyLabel: "ecoji",
+  // encode 方向吃字节；decode 输入是 emoji 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: ecojiEncode, decode: ecojiDecode,
   detect: () => 0,
 });
@@ -709,6 +746,8 @@ register({
   id: "base64dict", cat: "base", name: "凯撒自定义字典 Base64", desc: "用 64 字符自定义字典替换标准 base64 字符",
   family: "base64", familyLabel: "base64dict",
   params: [{ key: "key", label: "字典（64 字符）", type: "text", default: B64_STD, placeholder: B64_STD }],
+  // encode 方向吃字节；decode 输入是字典替换后的 base64 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base64DictEncode, decode: base64DictDecode,
   detect: () => 0,
 });
@@ -716,12 +755,16 @@ register({
   id: "multilineBase64", cat: "base", name: "多行 Base64", desc: "多行 base64 解码 / 按行切分编码",
   family: "base64", familyLabel: "multilineBase64",
   params: [{ key: "lineLen", label: "编码每行长度", type: "number", default: 76, placeholder: "1-1000" }],
+  // encode 方向吃字节；decode 输入是多行 base64 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: multilineBase64Encode, decode: multilineBase64Decode,
   detect: () => 0,
 });
 register({
   id: "base64decompress", cat: "base", name: "Base64 + Zlib", desc: "base64 ↔ zlib 压缩（浏览器 DecompressionStream）",
   family: "base64", familyLabel: "base64decompress",
+  // encode 方向吃字节（压缩真字节后出 base64）；decode 输入是 base64 文本，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: base64DecompressEncode, decode: base64DecompressDecode,
   detect: () => 0,
 });

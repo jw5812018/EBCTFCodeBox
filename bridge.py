@@ -16,7 +16,7 @@ bridge.py — T18 外部 exe 本地桥（独立本地服务，仅 Windows，署�
 
 用法：
   python bridge.py            # 默认端口 8181
-  python bridge.py 8199       # 指定端口
+  python bridge.py 8181       # 固定端口
 """
 import sys
 import os
@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import shutil
 import platform
+import time
 try:
     import winreg  # Windows 注册表（读系统强调色，MT42）
 except ImportError:
@@ -50,8 +51,7 @@ WHITELIST = {
 # 这些是纯 GUI 隐写/工具程序，无无人值守 CLI（或私有格式无法脚本化）。/api/launch 仅
 # Popen 拉起进程即返回，用户在弹出窗口里自己操作。安全：仍走白名单，绝不启动名单外的东西。
 LAUNCH_WHITELIST = {
-    # 吾爱破解版 GUI 隐写/水印工具
-    "watermarkh":   os.path.join(EXE_BASE, "gui", "watermarkH.exe"),
+    # watermarkH：已于 MT650 纯前端复刻为内置 op（watermarkhFft），exe 退场、条目移除。
     # JPHS for Windows：JPEG 图像隐写 GUI（jphide/jpseek）
     "jphswin":      os.path.join(EXE_BASE, "gui", "Jphswin.exe"),
     # NTFS 数据流编辑器（ADS 交换数据流查看/编辑）
@@ -205,8 +205,53 @@ DECOMPILE_TOOLS = {
 
 DECOMPILE_TIMEOUT = 120  # 反编较慢，独立超时（秒）
 
-def _resolve_tool(key):
-    """解析白名单工具首个存在的可执行路径；无则 None。"""
+# D7：exe 分支的总体预算。真实样本解出上百个 pyc，每个各起一次子进程必然撞超时
+#（实测 222 个 → 137 s）。这里改用「总体时间 + pyc 数量」双上限，达到即返回部分结果，
+# 而不是无限延长超时（延长只会在更慢的样本上再次超时）。
+EXE_TOTAL_BUDGET_SECONDS = 60
+EXE_MAX_PYC = 32
+
+# 可用性探测结果缓存：key = (路径, mtime)。只在 decompile-env / decompile 被显式调用时才
+# 触发，**正常启动绝不拉起任何外部进程**（零外发 + 正常启动不拉 Python 的契约）。
+_TOOL_PROBE_CACHE = {}
+TOOL_PROBE_TIMEOUT = 8  # 秒；短超时，避免探测本身成为新的阻塞源
+
+# 探测参数必须按工具给：统一的 `--version` 会产生**假阴性**——本机 7-Zip 明明可用，
+# 但 `7z --version` 退出码是 7（它只认 `-h`/无参），会被误判成「坏了」。
+TOOL_PROBE_ARGS = {
+    "7z": ["-h"],
+}
+
+def _probe_executable(path, timeout=TOOL_PROBE_TIMEOUT, args=None):
+    """「路径存在」≠「能工作」。这里真的跑一次 --version：退出码 0 才算可用。
+    返回 (ok, reason)；reason ∈ {'ok','missing','broken:exit=N','broken:<异常类名>'}。
+
+    背景：uncompyle6/decompyle3 3.9.3 与 xdis 5.0.13 的 API 不兼容，import 即
+    ImportError: PYTHON_VERSION_TRIPLE —— 文件明明在，却一跑就崩。旧实现只判存在，
+    于是把这些坏掉的工具报成「可用」，前端据此不灰置，误导用户。"""
+    if not path:
+        return False, "missing"
+    try:
+        mtime = os.path.getmtime(path) if os.path.isfile(path) else 0
+    except Exception:
+        mtime = 0
+    if args is None:
+        args = ["--version"]
+    key = (path, mtime, tuple(args))
+    if key in _TOOL_PROBE_CACHE:
+        return _TOOL_PROBE_CACHE[key]
+    try:
+        p = subprocess.run([path] + list(args), stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=timeout, shell=False)
+        res = (p.returncode == 0,
+               "ok" if p.returncode == 0 else "broken:exit=%s" % p.returncode)
+    except Exception as exc:
+        res = (False, "broken:%s" % type(exc).__name__)
+    _TOOL_PROBE_CACHE[key] = res
+    return res
+
+def _locate_tool(key):
+    """只做「定位」：返回首个存在的路径或 None（不做可用性判定）。"""
     for c in DECOMPILE_TOOLS.get(key, []):
         if os.path.isabs(c):
             if os.path.isfile(c):
@@ -216,6 +261,33 @@ def _resolve_tool(key):
             if w:
                 return w
     return None
+
+def _resolve_tool(key, usable_only=True):
+    """解析白名单工具：先定位，再（默认）真跑一次确认可用。
+    usable_only=False 退化为旧行为「只判存在」，仅用于对照/兼容。"""
+    for c in DECOMPILE_TOOLS.get(key, []):
+        path = c if (os.path.isabs(c) and os.path.isfile(c)) else (
+            shutil.which(c) if not os.path.isabs(c) else None)
+        if not path:
+            continue
+        if not usable_only:
+            return path
+        ok, _reason = _probe_executable(path, args=TOOL_PROBE_ARGS.get(key))
+        if ok:
+            return path
+    return None
+
+def tool_diagnostics():
+    """逐工具的可用性诊断（供 decompile-env 诚实上报）。"""
+    out = {}
+    for key in ("uncompyle6", "decompyle3", "pylingual", "7z"):
+        path = _locate_tool(key)
+        if not path:
+            out[key] = {"found": False, "usable": False, "reason": "missing"}
+            continue
+        ok, reason = _probe_executable(path, args=TOOL_PROBE_ARGS.get(key))
+        out[key] = {"found": True, "usable": ok, "reason": reason}
+    return out
 
 def _resolve_pyinstxtractor():
     """定位 PyInstxtractor：脚本文件优先，其次 pip 模块 pyinstxtractor_ng。
@@ -345,11 +417,27 @@ def _decompile_exe_bytes(data, workdir, label="input.exe"):
     # pyinstxtractor 产出 <name>_extracted 目录
     extracted = fp + "_extracted"
     files = []
+    # D7：真实样本可能解出上百个 pyc，逐个各起一次子进程必然撞超时（实测 222 个 → 137s）。
+    # 这里给 exe 分支一个**总体预算**（时间 + 数量），达到任一上限就停止并返回**部分结果 +
+    # 明确的截断原因**，而不是靠无限延长超时。
+    budget_deadline = time.time() + EXE_TOTAL_BUDGET_SECONDS
+    attempted = 0
+    truncated = None
     if os.path.isdir(extracted):
         for root, _dirs, names in os.walk(extracted):
             for n in names:
                 if not n.lower().endswith(".pyc"):
                     continue
+                if len(files) >= EXE_MAX_PYC:
+                    truncated = {"reason": "pyc_count_limit", "limit": EXE_MAX_PYC,
+                                 "attempted": attempted, "produced": len(files)}
+                    break
+                if time.time() > budget_deadline:
+                    truncated = {"reason": "total_budget_exhausted",
+                                 "budget_seconds": EXE_TOTAL_BUDGET_SECONDS,
+                                 "attempted": attempted, "produced": len(files)}
+                    break
+                attempted += 1
                 try:
                     with open(os.path.join(root, n), "rb") as pf:
                         d = pf.read()
@@ -359,11 +447,19 @@ def _decompile_exe_bytes(data, workdir, label="input.exe"):
                 r = _decompile_pyc_bytes(d, workdir, label=n)
                 r["name"] = n
                 files.append(r)
-    return {
+            if truncated:
+                break
+    result = {
         "ok": bool(files),
         "files": files,
         "note": "PyInstaller 解包 + 逐 pyc 反编" if files else "未在解包结果中找到 pyc",
     }
+    if truncated:
+        # 部分结果也要说明产出不完整的原因，不伪装成完整反编
+        result["truncated"] = truncated
+        result["partial"] = True
+        result["note"] = "已达总体预算，返回部分结果（未覆盖全部 pyc）"
+    return result
 
 def _safe_label(name, exts):
     """文件名安全化：basename + 拒路径穿越 + 校验扩展名。非法返回 None。"""
@@ -405,18 +501,28 @@ def decompile_env():
     except Exception:
         xdis_ok, xver = False, ""
     pk, _ref = _resolve_pyinstxtractor()
+    diag = tool_diagnostics()
+    tools_bool = {k: bool(v["usable"]) for k, v in diag.items()}
+    tools_bool["pyinstxtractor"] = bool(pk)
+    notes = []
+    if xdis_ok and xver:
+        # 如实声明已知的版本冲突：不修、不自动 pip，只告诉用户与前端。
+        if not diag.get("uncompyle6", {}).get("usable") and \
+           not diag.get("decompyle3", {}).get("usable"):
+            notes.append(
+                "uncompyle6/decompyle3 在本机不可用：其 3.9.3 与已装的 xdis %s 不兼容"
+                "（ImportError: PYTHON_VERSION_TRIPLE）。需用户自行处理版本约束，本工具不会自动安装。" % xver)
+    notes.append("pycdc（Decompyle++）本机存在，但按当前卡面口径**未**纳入白名单，故不参与反编。")
     return {
         "ok": True,
         "win": IS_WIN,
         "platform": platform.system(),
         "xdis": {"ok": xdis_ok, "version": xver},
-        "tools": {
-            "uncompyle6": bool(_resolve_tool("uncompyle6")),
-            "decompyle3": bool(_resolve_tool("decompyle3")),
-            "pylingual": bool(_resolve_tool("pylingual")),
-            "7z": bool(_resolve_tool("7z")),
-            "pyinstxtractor": bool(pk),
-        },
+        "tools": tools_bool,
+        # 新增：逐工具的「找到 / 可用 / 原因」，前端可据此精确灰置并给出原因
+        "toolDetails": diag,
+        "available": any(v["usable"] for v in diag.values()),
+        "notes": notes,
     }
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -687,35 +793,31 @@ class BridgeHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # 静默访问日志
 
+def create_extension_server(web_origins=()):
+    import importlib.util
+    name = "_ebctf_extension_bridge"
+    runtime = sys.modules.get(name)
+    if runtime is None:
+        spec = importlib.util.spec_from_file_location(name, os.path.join(ROOT, "mcp", "extension_bridge.py"))
+        runtime = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime)
+        sys.modules[name] = runtime
+    return runtime.create_server(ROOT, BridgeHandler, web_origins)
+
+
 def main():
-    argv = sys.argv[1:]
-    port = 8181
-    for a in argv:
-        if a.isdigit():
-            port = int(a)
-            break
-    if not IS_WIN:
-        print("警告：本地桥仅支持 Windows（当前 %s），服务仍启动但 /api/run 会拒绝。" % platform.system())
-    httpd = None
-    for _ in range(20):
-        try:
-            httpd = ThreadingHTTPServer(("127.0.0.1", port), BridgeHandler)
-            break
-        except OSError:
-            port += 1
-    if httpd is None:
-        print("启动失败：8181~8200 端口都被占用")
-        sys.exit(1)
-    print("")
-    print("  T18 本地桥已启动（仅 Windows，仅 127.0.0.1）")
-    print("  http://localhost:%d/" % port)
-    print("  白名单工具: %s" % ", ".join(WHITELIST))
-    print("  按 Ctrl+C 停止。")
-    print("")
+    if any(a.isdigit() and a != "8181" for a in sys.argv[1:]):
+        raise SystemExit("本地桥固定 127.0.0.1:8181，不支持端口漂移")
+    try:
+        httpd = create_extension_server(("http://localhost:8180", "http://127.0.0.1:8180"))
+    except OSError as exc:
+        raise SystemExit(str(exc))
+    print("本地桥 http://127.0.0.1:8181/；按 Ctrl+C 停止")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n已停止。")
+        pass
+    finally:
         httpd.server_close()
 
 if __name__ == "__main__":

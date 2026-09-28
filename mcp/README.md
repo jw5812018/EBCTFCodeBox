@@ -2,7 +2,7 @@
 
 把恒烈CTF编码工具箱的能力（列分类 / 列 op / 查参数 / 智能识别 / 跑 op / 一键智能解码）暴露成 MCP 工具，供支持 MCP 的 AI 客户端（Claude Desktop、Cline 等）调用。全程本地进程，零外发。
 
-server 版本 `0.1.7`，对外可见 op 749 个。`ebctf_list_categories` 列出 18 个功能分类（注册表 `CATEGORIES` 共 19 项，含 `home` 首页；首页不计入功能分类）。
+server 版本 `0.1.8-beta3`，对外可见 op 749 个。`ebctf_list_categories` 列出 18 个功能分类（注册表 `CATEGORIES` 共 19 项，含 `home` 首页；首页不计入功能分类）。
 
 ## 文件
 
@@ -24,11 +24,11 @@ server 版本 `0.1.7`，对外可见 op 749 个。`ebctf_list_categories` 列出
 
 ## 一键接入（推荐）
 
-项目根 `点我启动.py` 已内置 MCP 两个模式，无需手抄路径：
+项目根 `通用点我启动.py` 已内置 MCP 两个模式，无需手抄路径：
 
 ```
-py 点我启动.py --mcp-config   # 打印各客户端接入配置（已填好本机绝对路径），照抄即可
-py 点我启动.py --mcp          # 直接跑 MCP stdio server（供手动调试 / 客户端 command 指本脚本）
+py 通用点我启动.py --mcp-config   # 打印各客户端接入配置（已填好本机绝对路径），照抄即可
+py 通用点我启动.py --mcp          # 直接跑 MCP stdio server（供手动调试 / 客户端 command 指本脚本）
 ```
 
 `--mcp-config` 会输出 Claude Code / Cursor / Trae / Codex / Cline / Claude Desktop 通用的

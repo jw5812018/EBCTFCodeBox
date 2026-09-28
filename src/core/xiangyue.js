@@ -279,7 +279,7 @@ register({
   noAuto: true,
   params: [
     { key: "password", label: "口令", type: "text", default: DEFAULT_PASSWORD, placeholder: "解密口令（默认内置）" },
-    { key: "showMeta", label: "附带识别信息", type: "checkbox", default: false },
+    { key: "showMeta", label: "附带识别信息", type: "bool", default: false },
   ],
   run: async (t, p) => {
     const text = (t || "").trim();
@@ -471,7 +471,7 @@ register({
       { value: "pict", label: "象形文字" }, { value: "emoji", label: "Emoji" },
       { value: "zw", label: "零宽字符" }, { value: "b64", label: "Base64" },
     ] },
-    { key: "randomPick", label: "候选字符随机", type: "checkbox", default: false },
+    { key: "randomPick", label: "候选字符随机", type: "bool", default: false },
   ],
   run: async (t, p) => {
     const text = t || "";

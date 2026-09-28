@@ -17,8 +17,6 @@
  *
  * 红线：纯数据 + 纯函数，无外部依赖；detect 不改文本，skeleton 只做字符级替换。
  */
-import { register } from "./registry.js";
-
 // ============ 同形字 → ASCII 骨架 映射 ============
 // key = 同形字（非 ASCII 或易混 ASCII），value = 其视觉骨架（ASCII 目标字符）。
 // 来源：Unicode confusables.txt（UTS #39）常见子集。
@@ -174,13 +172,7 @@ function detect(text) {
   return { dominant, hits };
 }
 
-// ============ 注册 op ============
-register({
-  id: "confusablesSkeleton", cat: "stego", name: "同形字骨架归一化",
-  desc: "把同形异义字（西里尔/希腊/全角等）替换为其 ASCII 视觉骨架，用于钓鱼域名/仿冒串比对（如 раypal→paypal）。单向 run。",
-  params: [],
-  run: (t) => skeletonReport(t),
-});
+// ============ 导出（骨架归一化 run 已并入统一「隐写检测」op，不再自我注册） ============
 
 export {
   CONFUSABLE_SKELETON,

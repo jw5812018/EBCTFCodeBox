@@ -115,4 +115,21 @@ export default {
     ],
     aka: ["zip password crack", "zipcrypto brute", "zip 弱口令", "zip 密码爆破", "zip爆破", "zip密码破解", "ZipCrypto crack", "zip字典爆破", "压缩包密码爆破", "zip brute force", "PKWARE加密破解", "zip口令爆破"],
   },
+  huffmanCodec: {
+    what: "Huffman coding: lossless compression assigning variable-length codes by symbol frequency (frequent = short). Two modes — frequency mode (input statistics or a weights table → deterministic canonical codes) and table mode (user-supplied symbol→code table), both directions.",
+    principle:
+      "Two steps: (1) build the tree with a min-heap keyed by (frequency, smallest byte), merging the two smallest nodes until one tree remains; the assignment follows the canonical rule (sort by code length then byte value, incrementing codes), so both ends derive the identical table. (2) encode by concatenating code words per symbol, pack bits MSB-first into bytes, with bitLen recording the true bit count. Decoding walks the table bit by bit. The prefix-free property guarantees unambiguous decoding.",
+    usage: "Encode: pick a mode (frequency mode may take a weights table; empty = count from input), paste text → table + hex + bitLen. Decode: paste hex, set bitLen, supply the same weights/table → original text.",
+    examples: [
+      { in: "ABRACADABRA (frequency mode, from input)", out: "A=0, R=10, B=110, C=1110, D=1111 (canonical), 23 bits → hex 69cf68, bitLen=23", desc: "Classic example: 5 symbols, frequencies 5/2/2/1/1" },
+      { in: "Table mode: a 0 / b 110 / c 111 / d 10 + input abdacdbcdabcd", out: "29-bit stream (hex 69ede6f0), decodes back to the original", desc: "User tables need not be canonical, only prefix-free" },
+    ],
+    tips: [
+      "Frequency-mode decoding requires the same weights table used for encoding (or re-count the same source text); a different table yields garbage or a truncation error.",
+      "Lines starting with '#' are comments in weights/table inputs; the '#' symbol itself is written \"#\" or \\x23.",
+      "Weights accept \\xNN/0xNN for arbitrary bytes; Chinese text expands into multi-byte UTF-8 symbols.",
+      "The bitstream ships as hex + bitLen as two separate values — no private container format is defined.",
+    ],
+    aka: ["huffman", "huffman coding", "huffman encode", "huffman decode", "canonical huffman", "huffman table", "prefix code", "huffman compression", "huffman tree", "variable length code", "赫夫曼编码"],
+  },
 };

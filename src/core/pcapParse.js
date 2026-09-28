@@ -501,6 +501,7 @@ export function dissectTCP(payload) {
   const dataOffset = ((payload[12] >> 4) & 0x0F) * 4;
   const flags = payload[13];
   const window = u16be(payload, 14);
+  const urgentPointer = u16be(payload, 18); // RFC 9293 §3.1，URG=1 时为紧急数据末字节相对本段 seq 的偏移
   const FIN = (flags & 0x01) !== 0;
   const SYN = (flags & 0x02) !== 0;
   const RST = (flags & 0x04) !== 0;
@@ -520,6 +521,7 @@ export function dissectTCP(payload) {
     flags: { FIN, SYN, RST, PSH, ACK: ACK2, URG },
     flagStr: ["FIN","SYN","RST","PSH","ACK","URG"].filter((f,i) => [FIN,SYN,RST,PSH,ACK2,URG][i]).join(",") || "none",
     window,
+    urgentPointer,
     payload: appData,
   };
 }
@@ -639,10 +641,15 @@ export function dissectDNS(payload) {
     else if (rtype === 5 || rtype === 2 || rtype === 12) { // CNAME/NS/PTR
       const parsed = parseDnsName(payload, pos);
       rdataStr = parsed.name;
-    } else if (rtype === 16) { // TXT
-      const txtLen = rdata[0];
+    } else if (rtype === 16) { // TXT：一个或多个 <character-string>，语义为顺序拼接（RFC 1035 §3.3.14）
       rdataStr = "";
-      for (let k = 0; k < txtLen && k + 1 < rdata.length; k++) rdataStr += String.fromCharCode(rdata[1 + k]);
+      let toff = 0;
+      while (toff < rdata.length) {
+        const sl = rdata[toff];
+        if (toff + 1 + sl > rdata.length) break; // 长度字节越界：截断如实停止
+        for (let k = 0; k < sl; k++) rdataStr += String.fromCharCode(rdata[1 + toff + k]);
+        toff += 1 + sl;
+      }
     } else if (rtype === 15) { // MX
       const pref = u16be(rdata, 0);
       const exch = parseDnsName(payload, pos + 2);

@@ -20,7 +20,7 @@
  * 性能提示（desc + 输出均标注）：攻击 CPU 密集，典型耗时几分钟~几十分钟
  * 峰值内存 300-500MB（密钥表）。wasm 是多线程 pthread（bkcrack attack
  * 无条件 std::thread，关不掉），部署需 COOP/COEP 头启用 SharedArrayBuffer
- * （点我启动.py 的 end_headers 已下发 same-origin + require-corp）。
+ * （通用点我启动.py 的 end_headers 已下发 same-origin + require-corp）。
  *
  * 明文语义提示：ZipCrypto 加密的是**压缩后**字节。method=0(stored) 时已知明文=原文；
  * method=8(deflate) 时已知明文需是 deflate 后的字节（对已知原文做同参数 deflate 再取）。
@@ -33,6 +33,15 @@
  * 契约：register({id, cat:'analysis', name, desc, params, run})。
  */
 import { register } from "./registry.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ============================================================
 // 输入文本 → 字节（hex / base64 / base64url / 原样 UTF-8）
@@ -96,7 +105,7 @@ function bytesToHex(bytes, max = 64) {
 function bytesToOutput(bytes) {
   if (!bytes || bytes.length === 0) return { text: "(空)", mode: "text" };
   try {
-    const s = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const s = _decodeUtf8Fatal(bytes);
     let ctrl = 0;
     for (const ch of s) {
       const c = ch.codePointAt(0);
@@ -313,7 +322,7 @@ async function bkcrackRun(text, p) {
     lines.push("  要启用攻击，请放置 wasm：");
     lines.push("    文件: public/wasm/bkcrack.js + public/wasm/bkcrack.wasm");
     lines.push("    来源: kimci86/bkcrack（C++17）经 emscripten 编译（MODULARIZE 产物）。");
-    lines.push("  注: 旧本地桥 bkcrack.exe 通道已下线（2026-09-13 恒烈裁决删除）；WASM 版已覆盖 exe 三面基准（T411）。");
+    lines.push("  注: 旧本地桥 bkcrack.exe 通道已下线；WASM 版已覆盖 exe 三面基准。");
     lines.push("  零外发: wasm 资源随包本地分发，绝不 CDN。");
     return lines.join("\n");
   }
@@ -371,9 +380,9 @@ async function bkcrackRun(text, p) {
 // ============================================================
 register({
   id: "bkcrackAttack",
-  cat: "forensic",
+  cat: "crack",
   name: "ZipCrypto 已知明文攻击 (bkcrack)",
-  desc: "ZIP 传统 ZipCrypto 加密的杀手锏：给出某条目 ≥12 字节连续已知明文，恢复内部密钥态并解密全档，无视密码长度（非 AES）。四种模式：明文攻击求密钥 / 攻击+解密 / 已知密钥态解密（-k）/ 已知密钥态暴力恢复密码（-k -r）。放置 public/wasm/bkcrack.js 后启用，wasm 缺失自动降级。⚠ CPU 密集，数秒~几十分钟、峰值内存 300-500MB。",
+  desc: "ZIP 传统 ZipCrypto 加密的杀手锏（开源工具 bkcrack 的本地 WASM 封装，代码来源 kimci86/bkcrack，https://github.com/kimci86/bkcrack）：给出某条目 ≥12 字节连续已知明文，恢复内部密钥态并解密全档，无视密码长度（非 AES）。四种模式：明文攻击求密钥 / 攻击+解密 / 已知密钥态解密（-k）/ 已知密钥态暴力恢复密码（-k -r）。放置 public/wasm/bkcrack.js 后启用，wasm 缺失自动降级。⚠ CPU 密集，数秒~几十分钟、峰值内存 300-500MB。",
   params: [
     {
       key: "inputEnc", label: "加密 ZIP 编码", type: "select", default: "auto",

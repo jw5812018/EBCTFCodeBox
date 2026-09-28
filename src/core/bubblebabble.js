@@ -25,8 +25,9 @@ const VOWELS = "aeiouy";
 const CONSONANTS = "bcdfghklmnprstvzx";
 const PADDING = "x";
 
-function bubbleEncode(text) {
-  const bytes = new TextEncoder().encode(String(text || ""));
+function bubbleEncode(text, p) {
+  // 字节直通：BubbleBabble 编码的是字节指纹，上游真字节直接编。
+  const bytes = (p && p.rawBytes) || new TextEncoder().encode(String(text || ""));
   let out = PADDING;
   let c = 1;
   for (let i = 0; i < bytes.length + 1; i += 2) {
@@ -104,6 +105,8 @@ register({
   cat: "text",
   name: "BubbleBabble 编码",
   desc: "Antti Huima 2000 防误读编码：2 字节 → 6 字符，x 包裹 + - 分隔（如 ping → xisak-nerek-loxix）。CTF 指纹/校验和可读展示用",
+  // encode 方向吃字节；decode 输入是 babble 文本，不吃字节。
+  acceptsBytes: true,
   encode: bubbleEncode,
   decode: bubbleDecode,
 });

@@ -337,7 +337,7 @@ const CHANNEL_OPTIONS = [
 // 与 lsbImage 同构（活先例）。decode 方向不读 text 输入。
 register({
   id: "dctWatermark",
-  cat: "stego",
+  cat: "stegoFile",
   name: "DCT 盲水印",
   desc: "文本水印嵌入/提取（8×8 DCT 中频 QIM 量化）。嵌入方向输出带水印 PNG，提取方向输出文本，须同强度/通道。",
   params: [

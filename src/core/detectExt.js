@@ -1,6 +1,6 @@
 // detectExt.js — T41 detect 识别函数补全（扩展层）。
 // 为 registry 中"有 decode 但缺 detect"的 op 补全识别函数，使 oneClickDecode 能识别更多格式。
-// 红线：不改主开发源码文件，运行时 monkey-patch 给 op 对象加 detect 字段。detect 只读不写。
+// 红线：不改开发方源码文件，运行时 monkey-patch 给 op 对象加 detect 字段。detect 只读不写。
 // 置信度策略：固定变换/字符集明确 0.3-0.5；需密钥/参数 0.1-0.2（兜底）；自反变换 0.1（防误报）。
 import { OPS } from "./registry.js";
 
@@ -33,7 +33,7 @@ const DETECTORS = {
     const leetChars = /[0134578@$]/.test(s);
     const hasAlpha = /[A-Za-z]/.test(s);
     // leetSpeak 是冷门算法但 detect 命中率极高（含 0/1/@ 就中），易在穷举/多层时前排刷存在感。
-    // 降到 0.15（恒烈需求3），配合 compositeScore 里 PLAINTEXT_STYLE_OPS 的 +35 链惩罚一起压后。
+    // 降到 0.15（产品裁决3），配合 compositeScore 里 PLAINTEXT_STYLE_OPS 的 +35 链惩罚一起压后。
     return leetChars && hasAlpha ? 0.15 : 0;
   },
   natoAlphabet: (t) => {

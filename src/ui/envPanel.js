@@ -23,6 +23,7 @@ import {
 import { ACCENT_PRESETS, DEFAULT_ACCENT, resetAccent } from "./dynamicColor.js";
 import { icon as iconSvg } from "./icons.js";  // .msym 无字体 ligature，须 icon() 注入内联 SVG
 import { THEME_VARIANTS } from "./themePicker.js";
+import { attachModalLifecycle } from "./modalLifecycle.js";
 import { getLocale } from "../i18n/index.js";
 
 const ACCENT_KEY = "ebctf.accent";  // 与 main.js 一致，仅读取判当前选中态
@@ -92,7 +93,7 @@ const _ZH = {
   "ui.env.syncAccentTip": "读取 Windows 系统强调色并应用（仅本地版）",
   "ui.env.syncAccentOk": "已同步系统强调色",
   "ui.env.syncAccentFail": "系统强调色不可用",
- // ---- 一键重置（恒烈 2026-08-26 需求；i18n 冻结期走本地兜底）----
+ // ---- 一键重置（产品负责人 2026-08-26 需求；i18n 冻结期走本地兜底）----
   "ui.env.resetTitle": "重置",
   "ui.env.resetNote": "清除本站全部本地数据（自定义实现、配方、方案、设置、离线缓存），程序回到首次使用的状态。",
   "ui.env.resetBtn": "一键重置程序",
@@ -274,7 +275,7 @@ function renderPanelContent(state) {
   wrap.append(renderThemeSection());
  // 强调色区（动态取色）
   wrap.append(renderAccentSection());
- // 一键重置区（危险操作，面板底部，恒烈 2026-08-26 需求）
+ // 一键重置区（危险操作，面板底部，产品负责人 2026-08-26 需求）
   wrap.append(renderResetSection());
   return wrap;
 }
@@ -296,25 +297,29 @@ function renderResetSection() {
 
 // M3 风格二次确认（遮罩 + 圆角卡片 + 右下操作行；Esc / 点遮罩 = 取消）
 function confirmHardReset() {
-  const mask = el("div", { class: "env-reset-mask", onclick: (e) => { if (e.target === mask) close(); } });
+  const previousFocus = document.activeElement;
+  const mask = el("div", { class: "env-reset-mask" });
   const cancelBtn = el("button", { class: "env-reset-btn-cancel", type: "button" }, t("ui.env.resetCancel"));
   cancelBtn.addEventListener("click", () => close());
   const okBtn = el("button", { class: "env-reset-btn-ok", type: "button" }, msym("restart_alt"), t("ui.env.resetConfirmOk"));
   okBtn.addEventListener("click", () => { close(); hardResetApp(); });
-  const card = el("div", { class: "env-reset-dialog", role: "alertdialog", "aria-modal": "true" },
+  const card = el("div", { class: "env-reset-dialog", role: "alertdialog", "aria-modal": "true", "aria-label": t("ui.env.resetConfirmTitle") },
     el("div", { class: "env-reset-dialog-icon" }, msym("restart_alt")),
     el("div", { class: "env-reset-dialog-title" }, t("ui.env.resetConfirmTitle")),
     el("div", { class: "env-reset-dialog-body" }, t("ui.env.resetConfirmBody")),
     el("div", { class: "env-reset-dialog-actions" }, cancelBtn, okBtn),
   );
   function close() {
-    mask.remove();
-    document.removeEventListener("keydown", onKey);
+    if (lifecycle) { lifecycle.release(); lifecycle = null; }
+    if (mask._closing) return;
+    mask._closing = true;
+    mask.classList.add("env-reset-closing");
+    setTimeout(() => { if (mask.isConnected) mask.remove(); }, 250);
   }
-  const onKey = (e) => { if (e.key === "Escape") close(); };
-  document.addEventListener("keydown", onKey);
+  let lifecycle = null;
   mask.append(card);
   document.body.append(mask);
+  lifecycle = attachModalLifecycle(mask, { dialog: card, onClose: close, initialFocus: okBtn, restoreFocusTo: previousFocus });
 }
 
 // 执行重置：localStorage / sessionStorage / Cookie / Cache Storage / Service Worker 全清，
@@ -514,7 +519,7 @@ function normHex(v) {
 
 // 昼夜切换区（放强调色区前，同属「外观」调整）。复用 main.js 暴露的 window 钩子，
 // 不反向 import。三态按钮（跟随系统/浅色/深色），当前偏好高亮；点击即切 + 持久化（main.js 内处理）。
-// 默认「跟随系统」（恒烈需求4）。
+// 默认「跟随系统」（产品裁决4）。
 function renderThemeSection() {
   const sec = el("div", { class: "env-section env-theme-box" });
   sec.append(el("div", { class: "env-section-title" }, msym("dark_mode"), t("ui.env.theme")));

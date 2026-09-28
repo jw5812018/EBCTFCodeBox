@@ -138,7 +138,7 @@ function toast(msg) {
 }
 
 // CM6 原生搜索/跳转面板中文化（EditorState.phrases，左右实例共用）。
-// 恒烈两轮拍板：全英文不行；全中文长词又把小面板塞爆 → 导航/开关改紧凑符号（VSCode 风格），
+// 产品负责人两轮拍板：全英文不行；全中文长词又把小面板塞爆 → 导航/开关改紧凑符号（VSCode 风格），
 // 语义靠输入框 aria「查找」+ 按钮位置；找不到的 key 自动回退英文，多给无副作用。
 const CM_PHRASES = {
   "Find": "查找",
@@ -176,7 +176,7 @@ function ensureCiCss() {
  * ⚠ 本 CSS 不含 # 十六进制硬编码（除 --ci-hl-* token 色定义行，T359 豁免）。
  */
 const CI_CSS = `
-/* ============ 开关行编组（恒烈：开关与「编辑代码」是同一件事的两个入口，整组激活态） ============ */
+/* ============ 开关行编组（产品负责人：开关与「编辑代码」是同一件事的两个入口，整组激活态） ============ */
 .ci-group{display:inline-flex;align-items:stretch;border:1px solid var(--outline);border-radius:var(--r-full);overflow:hidden;background:var(--surface-1);min-height:44px;transition:border-color var(--dur-short) var(--ease),background var(--dur-short) var(--ease);}
 .ci-group.on{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 10%,var(--surface-1));}
 .ci-group .ci-seg{display:flex;align-items:center;gap:var(--sp-2);padding:0 var(--sp-3);}
@@ -213,7 +213,7 @@ const CI_CSS = `
 .ci-dialog .ci-body{display:flex;flex:1;min-height:0;gap:0;align-items:stretch;}
 .ci-dialog .ci-left{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
 
-/* 二级左右分栏：CM6 编辑区 ｜ 权威源码 pre（恒烈左右对照；头部共用一行，查找面板只有一个） */
+/* 二级左右分栏：CM6 编辑区 ｜ 权威源码 pre（产品负责人左右对照；头部共用一行，查找面板只有一个） */
 .ci-dialog .ci-main{display:flex;flex:1 1 0%;min-height:0;gap:var(--sp-1);align-items:stretch;flex-direction:row;}
 .ci-dialog .ci-main-left{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;gap:var(--sp-1);}
 .ci-editor-toolbar{display:flex;align-items:center;gap:var(--sp-1);padding:4px 8px;border:1px solid var(--outline-var);border-radius:var(--r-lg);background:var(--surface-2);flex-wrap:wrap;flex:none;margin:var(--sp-1) var(--sp-1) 0;}
@@ -237,7 +237,7 @@ const CI_CSS = `
 :is(.ci-editor-wrap,.ci-spanel-pre) .cm-panels button{cursor:pointer;padding:0 10px;}
 :is(.ci-editor-wrap,.ci-spanel-pre) .cm-panels button:hover{background:var(--surface-hi);}
 :is(.ci-editor-wrap,.ci-spanel-pre) .cm-panels .cm-textfield{padding:0;}
-/* 搜索面板（恒烈两轮定稿）：箭头/关闭钮 30×30 方形；带文字的按钮（替换/全部替换/全部）自适应变长，不硬塞 */
+/* 搜索面板（产品负责人两轮定稿）：箭头/关闭钮 30×30 方形；带文字的按钮（替换/全部替换/全部）自适应变长，不硬塞 */
 :is(.ci-editor-wrap,.ci-spanel-pre) .cm-search{padding:5px 6px;gap:4px;flex-wrap:wrap;align-items:center;}
 :is(.ci-editor-wrap,.ci-spanel-pre) .cm-search .cm-textfield{width:180px;}
 :is(.ci-editor-wrap,.ci-spanel-pre) .cm-search .cm-button{width:30px;height:30px;padding:0;justify-content:center;align-items:center;flex:none;font-size:12px;font-variant-numeric:tabular-nums;line-height:1;box-sizing:border-box;}
@@ -265,7 +265,7 @@ const CI_CSS = `
 /* 编辑区 | 源码面板 之间的竖向分隔条（可拖拽调源码面板宽度） */
 .ci-dialog .ci-src-resize{flex:none;width:6px;cursor:col-resize;touch-action:none;background:transparent;border-radius:var(--r-full);transition:background var(--dur-short) var(--ease);margin:0 1px;}
 .ci-dialog .ci-src-resize:hover,.ci-dialog .ci-src-resize:active{background:color-mix(in srgb,var(--primary) 35%,transparent);}
-/* 右侧源码工具栏 = 左侧编辑区工具栏同款浮动卡片（同边距/同圆角/同底色，恒烈要求两边一模一样） */
+/* 右侧源码工具栏 = 左侧编辑区工具栏同款浮动卡片（同边距/同圆角/同底色，产品裁决两边一模一样） */
 .ci-dialog .ci-spanel-toolbar{display:flex;align-items:center;gap:var(--sp-1);padding:4px 8px;border:1px solid var(--outline-var);border-radius:var(--r-lg);background:var(--surface-2);flex-wrap:wrap;flex:none;margin:var(--sp-1) var(--sp-1) 0;}
 .ci-dialog .ci-spanel-toolbar .ci-src-title{flex:1;font-size:12.5px;font-weight:600;color:var(--on-surface-var);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:60px;}
 /* 右侧源码内容卡片 = 左侧编辑区卡片同款 */
@@ -310,7 +310,7 @@ const CI_CSS = `
 .ci-chip{display:block;width:100%;text-align:start;background:none;border:0;color:var(--on-surface-var);padding:6px 10px;cursor:pointer;font-family:var(--mono,monospace);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:ltr;}
 .ci-chip:hover{background:color-mix(in srgb,var(--primary) 18%,transparent);color:var(--on-primary-container);}
 .ci-builtin{padding:6px 10px;border-bottom:1px solid var(--outline-var);}
-/* 「当前算法实现」灰色标题条圆角（恒烈点名）：沿用 .ci-panel h4 灰底，四角圆角成胶囊标题 */
+/* 「当前算法实现」灰色标题条圆角（产品裁决）：沿用 .ci-panel h4 灰底，四角圆角成胶囊标题 */
 .ci-builtin h4{border-radius:var(--r-md);}
 .ci-builtin .ci-bi-note{font-size:11px;color:var(--on-surface-var);line-height:1.5;margin-bottom:6px;}
 .ci-builtin .btn{width:100%;justify-content:center;}
@@ -328,7 +328,7 @@ const CI_CSS = `
 .ci-dialog{--ci-hl-kw:#ff8a65;--ci-hl-str:#a5d6a7;--ci-hl-com:#6f5f57;--ci-hl-num:#81d4fa;--ci-hl-fn:#ce93d8;--ci-hl-re:#ffcc80;}
 html[data-theme="light"] .ci-dialog{--ci-hl-kw:#b4501a;--ci-hl-str:#256d47;--ci-hl-com:#7d7a77;--ci-hl-num:#0061a4;--ci-hl-fn:#6750a4;--ci-hl-re:#8a5100;}
 
-/* ---- 触屏（恒烈「一定一定要适配触屏」：热区 ≥44×44；编辑区工具栏同为按钮组，一并覆盖） ---- */
+/* ---- 触屏（产品负责人「一定一定要适配触屏」：热区 ≥44×44；编辑区工具栏同为按钮组，一并覆盖） ---- */
 @media (hover:none){
   .ci-head .btn-icon{width:44px;height:44px;}
   .ci-editor-toolbar .btn-icon{width:44px;height:44px;}
@@ -440,7 +440,7 @@ export function renderCustomToggle(container, opId, ctx = {}) {
 // ============ 内置实现源码提取 ============
 
 /*
- * 把 op 的内置 encode/decode 源码抽出来当编辑起点（恒烈原话：「打开编辑代码的时候就能看到
+ * 把 op 的内置 encode/decode 源码抽出来当编辑起点（产品裁决：「打开编辑代码的时候就能看到
  * 当前算法的实现，我可以直接在当前算法改」）。
  *
  * ⚠ 诚实边界：Function.prototype.toString() 只给函数体，**不给**它引用的模块作用域变量与
@@ -644,7 +644,7 @@ export async function openCustomImplEditor(opId, ctx = {}) {
       }, { dark: isDark() }),
     ];
   }
-  // 编辑区 | 源码面板 之间的分隔条：拖拽调右侧源码面板宽度（恒烈要求两侧宽度可调）
+  // 编辑区 | 源码面板 之间的分隔条：拖拽调右侧源码面板宽度（产品裁决两侧宽度可调）
   const srcResize = el("div", { class: "ci-src-resize", title: t("ui.custom.resizeHint") });
   main.append(srcResize);
   main.append(sPanel);

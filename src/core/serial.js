@@ -21,6 +21,15 @@
  */
 import { register } from "./registry.js";
 import { inputToBytes } from "./compress.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 const INPUT_ENC_PARAM = {
   key: "inputEnc", label: "输入编码", type: "select", default: "auto",
@@ -43,7 +52,7 @@ function bytesToHex(bytes, max = 1024) {
 function tryUtf8(bytes) {
   if (bytes.length === 0) return null;
   try {
-    const s = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const s = _decodeUtf8Fatal(bytes);
     let ctrl = 0;
     for (const ch of s) {
       const c = ch.codePointAt(0);

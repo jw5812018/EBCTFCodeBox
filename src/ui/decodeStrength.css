@@ -40,6 +40,14 @@
   from { opacity: 0; transform: scale(.96) translateY(8px); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
+/* 退出：独立 keyframe 名 + forwards，播完由 250ms 兜底摘除 */
+.ds-overlay.ds-closing { animation: ds-fade-out var(--dur-4) var(--ease-in) forwards; }
+@keyframes ds-fade-out { from { opacity: 1; } to { opacity: 0; } }
+.ds-overlay.ds-closing .ds-dialog { animation: ds-pop-out var(--dur-4) var(--ease-in) forwards; }
+@keyframes ds-pop-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(.96) translateY(8px); }
+}
 
 /* ---- 头部 ---- */
 .ds-head {
@@ -60,13 +68,12 @@
 .ds-close {
   flex: none;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px;
+  width: 36px; height: 36px;
   border-radius: var(--r-full);
   color: var(--on-surface-var);
   transition: background var(--dur-short) var(--ease), transform var(--dur-short) var(--ease);
 }
 .ds-close:hover { background: var(--surface-hi); color: var(--on-surface); }
-.ds-close:active { transform: scale(.92); }
 
 /* ---- 主体（双列布局：左=滑块+解析层数+列表 右=方案）---- */
 /* 显式 4 行：level(1) / depth(2) / tools(3) / list(4)，避免 auto-flow 把 depth 挤乱 */
@@ -307,9 +314,4 @@
   .ds-dialog { max-height: 96vh; }
   .ds-list { max-height: 160px; }
   .ds-prof-dump { min-height: 56px; }
-}
-
-/* 减弱动态效果：尊重系统无障碍设置（与 app.css 同口径） */
-@media (prefers-reduced-motion: reduce) {
-  .ds-overlay, .ds-dialog { animation: none; }
 }

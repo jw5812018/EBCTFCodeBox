@@ -22,8 +22,6 @@
  * stegoImage.js: lsbImage/pixelJihad/arnoldCat/imageBasic/lsbMulti/pngText/pngHeight/exifExtract/bitplaneSlicing/imageDiff
  * qrcode.js : qrGen/qrParse/barcodeIdentify
  */
-import { register } from "./registry.js";
-
 // ============================================================
 // 字符表：不可见格式字符（不含 Bidi 控制，单独在 bidiScan 处理）
 // ============================================================
@@ -617,58 +615,8 @@ function charInspect(text, p = {}) {
 }
 
 // ============================================================
-// 注册
+// 导出（本组 6 个文本检测 op 已并入统一「隐写检测」op，不再自我注册）
 // ============================================================
-register({
-  id: "zwScan", cat: "stego", name: "零宽字符扫描",
-  desc: "扫描文本中所有不可见 Unicode 格式字符（零宽 / 连接符 / 标记），列位置 + 高亮 + 统计 + 剥离",
-  params: [],
-  run: zwScan,
-});
-
-register({
-  id: "confusablesScan", cat: "stego", name: "同形异义字检测",
-  desc: "Unicode Homoglyph 检测：拉丁 / 西里尔 / 希腊混用，识别伪装为拉丁字母的可疑字符",
-  params: [],
-  run: confusablesScan,
-});
-
-register({
-  id: "unicodeNormalize", cat: "stego", name: "Unicode 规范化",
-  desc: "NFC/NFD/NFKC/NFKD 四种规范化形式互转 + 变化点分析 + NFKC 往返",
-  params: [
-    { key: "form", label: "规范化形式", type: "select", default: "NFC",
-      options: [
-        { value: "NFC", label: "NFC（规范分解 + 合成）" },
-        { value: "NFD", label: "NFD（规范分解）" },
-        { value: "NFKC", label: "NFKC（兼容分解 + 合成）" },
-        { value: "NFKD", label: "NFKD（兼容分解）" },
-      ],
-    },
-  ],
-  run: unicodeNormalize,
-});
-
-register({
-  id: "whitespaceScan", cat: "stego", name: "空格隐写检测",
-  desc: "扫描多种空白字符（NBSP / Em Space / Thin Space 等）+ 行尾空白 LSB 解码尝试（Snow 类）",
-  params: [],
-  run: whitespaceScan,
-});
-
-register({
-  id: "bidiScan", cat: "stego", name: "双向控制符检测",
-  desc: "Trojan Source 攻击检测：U+202E (RLO) / U+202D (LRO) 等 Bidi 控制符 + 风险评级 + 剥离",
-  params: [],
-  run: bidiScan,
-});
-
-register({
-  id: "charInspect", cat: "stego", name: "字符属性透视",
-  desc: "逐字符显示码位 / UTF-8 / UTF-16 / 脚本 / Unicode 类别 / Block 名称",
-  params: [],
-  run: charInspect,
-});
 
 export {
   zwScan, confusablesScan, unicodeNormalize,

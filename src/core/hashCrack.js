@@ -14,7 +14,7 @@
  * - 哈希计算复用 hash.js 的纯函数（import md5/ntlm/sha/hmac，不碰原文件）。
  * - 内置字典小（约 300 条 top 弱口令，非 rockyou 全量）；大字典需用户导入。
  * - 爆破类用 run 单向（输入哈希，输出明文或未命中）。
- * - 算法层纯函数零 UI 依赖；UI 接 workerPool 并行化由主开发接入（本卡只实现算法层）。
+ * - 算法层纯函数零 UI 依赖；UI 接 workerPool 并行化由开发方接入（本卡只实现算法层）。
  * - 注册契约：register({id, cat:"analysis", name, desc, params, run})。
  * - 零外发：全部本地纯 JS 计算。
  *
@@ -281,7 +281,7 @@ function hashTypeIdentify(text) {
   }
 
   lines.push("");
-  lines.push("提示: 字典爆破见 hashDictCrack，彩虹表查询见 rainbowQuery");
+  lines.push("提示: 本工具只做类型识别与小字典演示，不做大规模爆破/查表——请用 hashcat（https://hashcat.net）、John the Ripper（https://www.openwall.com/john）或 CrackStation（https://crackstation.net）；产品内的「哈希字典爆破」「彩虹表查询」仅供弱口令快速验证");
   return lines.join("\n");
 }
 
@@ -456,8 +456,8 @@ register({
 register({
   id: "hashDictCrack",
   cat: "crypto",
-  name: "哈希字典爆破",
-  desc: "MD5/SHA1/SHA256/NTLM 字典爆破（top 弱口令 + 纯数字 + 日期，大字典需用户导入）",
+  name: "哈希字典爆破（小字典演示）",
+  desc: "MD5/SHA1/SHA256/NTLM 弱口令小字典演示：内置约 300 条 top 弱口令 + 纯数字 + 日期，秒级验证常见口令。本工具不做大规模爆破——正式字典/掩码爆破请用 hashcat（https://hashcat.net）或 John the Ripper（https://www.openwall.com/john），在线反查可用 CrackStation（https://crackstation.net）",
   params: [
     { key: "algo", label: "算法", type: "select", default: "auto", options: [
       { value: "auto", label: "自动（按长度猜）" },
@@ -480,8 +480,8 @@ register({
 register({
   id: "rainbowQuery",
   cat: "crypto",
-  name: "彩虹表查询",
-  desc: "本地预计算彩虹表查询（MD5/NTLM 预建表 O(1)，SHA 系实时查表，约 300 条小字典）",
+  name: "彩虹表查询（本地演示小表）",
+  desc: "本地内置约 300 条弱口令的演示小表（MD5/NTLM 预建 O(1)，SHA 系实时查），验证常见弱口令一查即中。真彩虹表请用公开彩虹表站点 CrackStation（https://crackstation.net）或离线工具 rcracki-mt 配公开表（https://github.com/iphelix/rcracki-mt），本工具不内置也不下载任何彩虹表数据",
   params: [
     { key: "algo", label: "算法", type: "select", default: "auto", options: [
       { value: "auto", label: "自动（按长度猜）" },
@@ -497,8 +497,8 @@ register({
 register({
   id: "hmacKeyBrute",
   cat: "crypto",
-  name: "HMAC 密钥爆破",
-  desc: "给定消息 + HMAC 值，穷举密钥字典（top 口令 + 纯数字，爆破 HMAC-SHA1/256/384/512 密钥）",
+  name: "HMAC 密钥爆破（小字典演示）",
+  desc: "给定消息 + HMAC 值，用内置小字典（top 口令 + 纯数字）演示 HMAC-SHA1/256/384/512 密钥穷举。本工具不做大规模爆破——大字典请用 hashcat（https://hashcat.net）或 John the Ripper（https://www.openwall.com/john）的 HMAC 格式",
   params: [
     { key: "algo", label: "算法", type: "select", default: "SHA-256", options: [
       { value: "SHA-1", label: "HMAC-SHA-1" },

@@ -477,7 +477,7 @@ function normalizeOut(out) {
 
 function bytesToText(bytes) {
   if (typeof TextDecoder !== "undefined") {
-    try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* 落 latin1 */ }
+    try { return _decodeUtf8Fatal(bytes); } catch { /* 落 latin1 */ }
   }
   return bytesToStr(bytes);
 }
@@ -487,6 +487,15 @@ function bytesToText(bytes) {
 // MT86/T356：EXTRA_PRESETS 扩充 24 个魔改预设（Base58 换表 / 凯撒多档 / TEA·XXTEA 自定义轮数 /
 // Hill 加密 / 按位反码 / baseWidthBits 宽基底等）。依赖 zero 循环、自包含，Worker 与主线程均可用。
 import { EXTRA_PRESETS } from "./customPresetsExtra.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 /*
  * 预设选型依据：MT72 需求 §4 点名的六类（Base64 换表 / 码表移位逆序 / 凯撒非 26 /

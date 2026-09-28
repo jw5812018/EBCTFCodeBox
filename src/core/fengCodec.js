@@ -15,7 +15,7 @@
  * 靠 decode 往返验证 + 源码逐行比对保证正确性。
  *
  * 参考源码：
- * DXBase64 资料/_dxb64/DXBase64算法示例.html（© 2025 风之暇想）
+ * DXBase64：参照「风之暇想」DXBase64 算法示例（© 2025 风之暇想）
  * 曰唱 github.com/fzxx/YueChang js/main.js
  */
 import { register } from "./registry.js";
@@ -69,9 +69,10 @@ function dxCrc16(bytes) {
 }
 
 // encode：UTF-8 → raw deflate → 2 字节随机 salt 循环 XOR → CRC16 → 帧 [crcHi,crcLo,salt0,salt1,...xor] → Base64
-async function dxEncode(text) {
-  if (!text) return "";
-  const bin = te(text);
+async function dxEncode(text, p) {
+  if (!text && !(p && p.rawBytes)) return "";
+  // 字节直通：deflate 压缩对象是真字节。
+  const bin = (p && p.rawBytes) || te(text);
   const com = await streamThrough("compress", "deflate-raw", bin);
   const salt = randomBytes(2);
   const xor = com.map((v, i) => v ^ salt[i % 2]);
@@ -181,6 +182,8 @@ register({
   id: "dxBase64", cat: "base", name: "DXBase64",
   desc: "风之暇想 DXBase64：raw deflate + 随机 salt 循环 XOR + CRC16 校验的 Base64 变体（带校验、每次密文不同、无需密钥，防和谐）",
   family: "base64", familyLabel: "dxBase64",
+  // encode 方向吃字节；decode 输入是 base64 帧，不吃字节。
+  acceptsBytes: true, textTransit: true,
   encode: dxEncode,
   decode: dxDecode,
 });

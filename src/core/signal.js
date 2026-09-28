@@ -11,6 +11,7 @@
 // op.pwmPpm.name / op.pwmPpm.desc
 
 import { register } from "./registry.js";
+import { bitsToBytes as _bitsToBytesStd, bytesToBits as _bytesToBitsStd } from "./bitsource.js";
 
 // ---------- 通用工具 ----------
 /** 把字符串规整成纯 '0'/'1' 比特流：去空白/下划线/0b 前缀，非法字符抛错。 */
@@ -26,24 +27,18 @@ function toBitStream(s) {
 }
 
 /** 比特流 → 字节序列（不足 8 位补 0，pad 标记是否补齐；返回 {bytes, padded}）。 */
+// 等价收敛：位流↔字节打包统一委托层③ 原语（src/core/bitsource.js），本函数只保留字符串接口与 pad 报告。
 function bitsToBytes(bits) {
   if (bits.length === 0) return { bytes: new Uint8Array(0), padded: 0 };
   const pad = (8 - (bits.length % 8)) % 8;
-  const padded = bits + "0".repeat(pad);
-  const out = new Uint8Array(padded.length / 8);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(padded.slice(i * 8, i * 8 + 8), 2);
-  }
-  return { bytes: out, padded: pad };
+  const arr = new Uint8Array(bits.length);
+  for (let i = 0; i < bits.length; i++) arr[i] = bits[i] === "1" ? 1 : 0;
+  return { bytes: _bitsToBytesStd(arr, "msb").bytes, padded: pad };
 }
 
 /** 字节序列 → 比特流（每字节 8 位，不补齐）。 */
 function bytesToBits(bytes) {
-  let out = "";
-  for (const b of bytes) {
-    out += b.toString(2).padStart(8, "0");
-  }
-  return out;
+  return Array.from(_bytesToBitsStd(bytes, "msb")).join("");
 }
 
 /** 文本 → UTF-8 字节 → 比特流（用于把明文转成比特流再编码）。 */

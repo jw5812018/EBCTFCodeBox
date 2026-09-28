@@ -66,8 +66,13 @@ function decodeBlock(codeStr, k) {
 }
 
 function hammingEncode(text, k = 4) {
-  k = Number(k) || 4;
-  if (k < 1) throw new Error("海明码: 数据位数须 ≥ 1");
+ // 注意：`Number(k) || 4` 会把显式传入的 0 静默变成 4，使下面的守卫永远拦不到 0
+  if (k === undefined || k === null || k === "") k = 4;   // 仅缺省/空参数取默认
+  else {
+    const kNum = Number(k);
+    if (!Number.isInteger(kNum) || kNum < 1) throw new Error("海明码: 数据位数须为 ≥ 1 的整数（收到 " + JSON.stringify(k) + "）");
+    k = kNum;
+  }
   const bits = (text || "").replace(/[^01]/g, "");
   if (!bits) return "";
   let out = "";
@@ -80,8 +85,13 @@ function hammingEncode(text, k = 4) {
 }
 
 function hammingDecode(text, k = 4) {
-  k = Number(k) || 4;
-  if (k < 1) throw new Error("海明码: 数据位数须 ≥ 1");
+ // 注意：`Number(k) || 4` 会把显式传入的 0 静默变成 4，使下面的守卫永远拦不到 0
+  if (k === undefined || k === null || k === "") k = 4;   // 仅缺省/空参数取默认
+  else {
+    const kNum = Number(k);
+    if (!Number.isInteger(kNum) || kNum < 1) throw new Error("海明码: 数据位数须为 ≥ 1 的整数（收到 " + JSON.stringify(k) + "）");
+    k = kNum;
+  }
   const n = k + parityCount(k);
   const bits = (text || "").replace(/[^01]/g, "");
   if (!bits) return "";
@@ -96,12 +106,20 @@ function hammingDecode(text, k = 4) {
   return data;
 }
 
+// 参数 k：仅当显式给出且非空时才取值，避免 `|| 4` 把 0 吞掉；非法值交给 hammingEncode/Decode 抛错
+function paramK(p) {
+  const raw = p && p.k;
+  if (raw === undefined || raw === null || raw === "") return 4;   // 仅缺省/空参数取默认
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new Error("海明码: 数据位数须为 ≥ 1 的整数（收到 " + JSON.stringify(raw) + "）");
+  return n;
+}
 register({
   id: "hammingCode", cat: "radix", name: "海明码 Hamming Code",
   desc: "单纠错海明码 (n,k)：编码插校验位，解码纠 1 位错（默认 k=4 即 (7,4)）",
   params: [{ key: "k", label: "数据位/块（4→(7,4), 11→(15,11)）", type: "number", default: 4 }],
-  encode: (t, p) => hammingEncode(t, Number((p && p.k) || 4)),
-  decode: (t, p) => hammingDecode(t, Number((p && p.k) || 4)),
+  encode: (t, p) => hammingEncode(t, paramK(p)),
+  decode: (t, p) => hammingDecode(t, paramK(p)),
 });
 
 export { hammingEncode, hammingDecode, encodeBlock, decodeBlock, parityCount };

@@ -9,12 +9,21 @@
  *
  * 对拍基准：权威规范 + zb3/malbolge-vm（malbolge-tools 参照页内嵌 VM，MIT）行为双源，
  * 七个官方样例（Hello World EU / wat / cat / cat.nmb / crackme / sep / encrypted）
- * 逐字节一致，见 资料/工程留存/T519/ 测试脚本。本文件为自研实现，未拷贝参照代码。
+ * 逐字节一致（独立测试脚本对拍）。本文件为自研实现，未拷贝参照代码。
  *
  * 与既有 op 的关系：malbolge（识别，fancy3.js）只做装载形式校验不执行；本 op 提供执行
  * 与 normalize/assemble 双向转换，两者装载合法性判定等价（V 值集 {4,5,23,39,40,62,68,81}）。
  */
 import { register } from "./registry.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 /* ---- 规范常量：94 字符置换表（esolangs spec / 原版 malbolge.c 同源） ---- */
 const XLAT1 = '+b(29e*j1VMEKLyC})8&m#~W>qxdRp0wkrUo[D7,XTcA"lI.v%{gJh4G\\-=O@5`_3i<?Z\';FNQuY]szf$!BS/|t:Pn6^Ha';
@@ -123,7 +132,7 @@ function execProgram(vm, stdin, maxSteps) {
 /* 输出字节 → 文本：优先按 UTF-8 严格解码（程序可输出多字节中文），失败回退 Latin-1 */
 function bytesToText(bytes) {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+    return _decodeUtf8Fatal(new Uint8Array(bytes));
   } catch {
     return Array.from(bytes, (b) => String.fromCharCode(b)).join("");
   }

@@ -2,12 +2,21 @@
 // 复用 core 算法层：executeRecipeAsync（支持异步 op）+ validateRecipe + PRESETS。
 // 线性链模型：nodes 顺序即执行序，第 i 个输出喂第 i+1 个输入。
 // 独立模块，自带轻量 el/msym，不反向依赖 main.js（低耦合）。
-import { OPS, getOp, opsByCat, defaultParams, CATEGORIES, FAMILY_NAMES } from "../core/registry.js";
+import { OPS, getOp, opsByCat, defaultParams, CATEGORIES } from "../core/registry.js";
 import { executeRecipeAsync, validateRecipe, PRESETS, recipeTerminalText, recipeDisplayText, recipeFileEntries } from "../core/recipes.js";
 import { downloadBytes, cloudWarnGate, fmtByteSize } from "./download.js";
 import { icon as iconSvg } from "./icons.js";
 import { attachEditorToolbar } from "./editorToolbar.js";
 import { ioArea } from "./ioArea.js"; // 天珩连字：输入/输出改 contenteditable div（textarea 吞 OpenType 特性）
+import { decodeUtf8Lossless } from "../core/bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ---- 轻量 DOM 工具（与 main.js 同形，但本模块自持，零耦合）----
 function el(tag, attrs = {}, ...children) {
@@ -42,6 +51,7 @@ const RECIPE_FALLBACK = {
   "ui.recipe.dir.run": "运行",
   "ui.recipe.addOp": "＋ 搜索添加操作…",
   "ui.recipe.addEmpty": "无匹配操作",
+  "ui.recipe.chooseFamilyOp": "选择要加入配方链的操作",
   "ui.recipe.unknownOp": "未知 op: ",
   "ui.recipe.moveUp": "上移",
   "ui.recipe.moveDown": "下移",
@@ -68,6 +78,11 @@ const RECIPE_FALLBACK = {
   "ui.recipe.importBadJson": "导入失败：不是合法 JSON",
   "ui.recipe.importBadFormat": "导入失败：非本工具配方格式",
   "ui.recipe.importEmpty": "导入失败：无可用节点",
+  "ui.recipe.pickFile": "载入文件到链头",
+  "ui.op.pickFile": "选择文件",
+  "ui.op.fileLoaded": "📎 已载入 {0}（{1}）· 该操作读取原始文件字节，无需手动转码",
+  "ui.op.droppedText": "已载入文本文件 {0}",
+  "ui.op.droppedHex": "二进制文件 {0} 已转 hex 载入",
 };
 
 // ---- 状态：配方链节点 [{opId, dir, params}] ----
@@ -75,6 +90,7 @@ const rState = {
   nodes: [],       // 链上节点，顺序即执行序
   input: "",       // 链输入
   showSteps: false, // 显示每步中间结果
+  file: null,      // 链头文件字节 {bytes, name}；手动编辑输入即失效（见 core/recipe.js 的 resolveRecipeHead）
 };
 
 // 输入超此阈值改手动转换（点「执行！/Bake！」），避免每次 keystroke 全链即时重跑卡死大文件。
@@ -99,6 +115,61 @@ function reflectPending() {
   if (bake) bake.classList.toggle("pending", _pending);
   const hint = document.getElementById("recipeBakeHint");
   if (hint) hint.style.display = _pending ? "" : "none";
+}
+
+// ---- 链头文件通道（UI 侧，口径与 core/recipe.js 的 resolveRecipeHead 一致）----
+// 链头 op 声明 acceptsBytes（音频/图像/二进制类）→ 真字节存 rState.file，编辑框只放占位提示，
+// 执行时以 {text, bytes} 交给 executeRecipeAsync，字节走 params.rawBytes；
+// 其余链头 → 按「UTF-8 可无损解码则文本、否则 hex」载入（与单 op 输入框拖入行为一致）。
+function chainHeadAcceptsBytes() {
+  const first = rState.nodes[0];
+  const op = first ? getOp(first.opId) : null;
+  return !!(op && op.acceptsBytes);
+}
+function bytesToHexLocal(bytes) {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, "0");
+  return s;
+}
+function loadChainFile(f, inArea) {
+  if (!f || !f.arrayBuffer) return;
+  f.arrayBuffer().then((buf) => {
+    const bytes = new Uint8Array(buf);
+    if (chainHeadAcceptsBytes()) {
+      rState.file = { bytes, name: f.name };
+      rState.input = tt("ui.op.fileLoaded", f.name, fmtByteSize(bytes.length));
+    } else {
+      rState.file = null;
+      let text = null;
+      try { text = _decodeUtf8Fatal(bytes); } catch { text = null; }
+      rState.input = text != null ? text : bytesToHexLocal(bytes);
+    }
+    if (inArea) inArea.value = rState.input;
+    maybeRunChain();
+  });
+}
+function pickChainFile(inArea) {
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.style.display = "none";
+  inp.addEventListener("change", () => {
+    const f = inp.files && inp.files[0];
+    inp.remove();
+    if (f) loadChainFile(f, inArea);
+  });
+  document.body.append(inp);
+  inp.click();
+}
+function attachChainDrop(inArea) {
+  inArea.addEventListener("dragover", (e) => { e.preventDefault(); inArea.classList.add("dragover"); });
+  inArea.addEventListener("dragleave", () => inArea.classList.remove("dragover"));
+  inArea.addEventListener("drop", (e) => {
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;   // 无文件（拖 op/文本）交给既有逻辑
+    e.preventDefault();
+    inArea.classList.remove("dragover");
+    loadChainFile(f, inArea);
+  });
 }
 
 // 拖拽重排：记住被拖节点的下标（null 表示无进行中的拖拽）
@@ -150,12 +221,12 @@ function toGraph() {
 
 // ---- 节点操作 ----
 // index 省略/越界 → 追加末尾；否则插到该下标前（左侧拖入按落点定位复用）
-function addNode(opId, index) {
+function appendNodeCore(opId, index) {
   const op = getOp(opId);
-  if (!op) return;
+  if (!op) return false;
  // 兜底：exe 类 op（requiresBridge）不进配方链——选择器已过滤，此处再堵左侧拖入等其他入口
  // 防止链式即时重跑反复启动外部程序。
-  if (op.requiresBridge) return;
+  if (op.requiresBridge) return false;
   const dirs = opDirs(op);
   const node = {
     opId,
@@ -164,8 +235,25 @@ function addNode(opId, index) {
   };
   if (index == null || index < 0 || index >= rState.nodes.length) rState.nodes.push(node);
   else rState.nodes.splice(index, 0, node);
+  return true;
+}
+function addNode(opId, index) {
+  if (!appendNodeCore(opId, index)) return;
   renderRecipe();
   maybeRunChain();
+}
+export function appendRecipeOpToTail(opId) {
+  const op = getOp(opId);
+  if (!op) return { ok: false, reason: "unknownOp", opId };
+  if (op.requiresBridge) return { ok: false, reason: "requiresBridge", opId };
+  const before = rState.nodes.length;
+  if (!appendNodeCore(opId, null) || rState.nodes.length !== before + 1) {
+    return { ok: false, reason: "notAdded", opId };
+  }
+  const rendered = (location.hash === "#/recipe" || location.hash.startsWith("#/recipe?"))
+    && !!(_recipeHost || document.getElementById("recipeHost"));
+  if (rendered) { renderRecipe(); maybeRunChain(); }
+  return { ok: true, opId, index: rState.nodes.length - 1, rendered };
 }
 function removeNode(i) { rState.nodes.splice(i, 1); renderRecipe(); maybeRunChain(); }
 function moveNode(i, delta) {
@@ -557,7 +645,9 @@ async function runChain() {
   };
   if (!out) return;
   if (!rState.nodes.length) { out.value = ""; if (stepsBox) stepsBox.innerHTML = ""; return; }
-  if (rState.input === "") { out.value = ""; if (stepsBox) stepsBox.innerHTML = ""; return; }
+  if (rState.input === "" && !rState.file) { out.value = ""; if (stepsBox) stepsBox.innerHTML = ""; return; }
+  // 链头文件通道：拖入文件时 input 是占位提示文案，真字节另走 bytes（见 core/recipe.js）
+  const chainInput = rState.file ? { text: rState.input, bytes: rState.file.bytes } : rState.input;
 
   const graph = toGraph();
   const v = validateRecipe(graph);
@@ -578,7 +668,7 @@ async function runChain() {
       let acc = rState.input;
       for (let i = 0; i < rState.nodes.length; i++) {
         const sub = { nodes: graph.nodes.slice(0, i + 1), edges: graph.edges.slice(0, i) };
-        acc = await executeRecipeAsync(sub, rState.input);
+        acc = await executeRecipeAsync(sub, chainInput);
         if (seq !== _seq) return;
         const op = getOp(rState.nodes[i].opId);
         stepsBox.append(el("div", { class: "recipe-step" },
@@ -589,7 +679,7 @@ async function runChain() {
       out.value = recipeTerminalText(acc);
       renderFiles(acc);
     } else {
-      const result = await executeRecipeAsync(graph, rState.input);
+      const result = await executeRecipeAsync(graph, chainInput);
       if (seq !== _seq) return;
       out.value = recipeTerminalText(result);
       renderFiles(result);
@@ -657,10 +747,17 @@ export function renderRecipe(container) {
  // 输入
   wrap.append(el("label", { class: "recipe-io-label" }, tt("ui.recipe.inputLabel")));
   const inArea = ioArea({ class: "io-area recipe-io", id: "recipeIn", placeholder: tt("ui.recipe.inputPh") });
+ // 链头文件按钮：插在预设选择器之后（音频/图像类预设靠它一把梭，无需手抄 hex）
+  bar.insertBefore(el("button", {
+    type: "button", class: "recipe-clear-btn", title: tt("ui.recipe.pickFile"),
+    onclick: () => pickChainFile(inArea),
+  }, msym("attach_file"), " " + tt("ui.recipe.pickFile")), bar.children[1] || null);
   inArea.value = rState.input;
-  inArea.addEventListener("input", () => { rState.input = inArea.value; maybeRunChain(); });
+ // 手动编辑输入 → 链头文件字节失效（与单 op 输入框同口径），避免 op 读到过期字节
+  inArea.addEventListener("input", () => { rState.file = null; rState.input = inArea.value; maybeRunChain(); });
+  attachChainDrop(inArea);
  // 编辑框记事本化——输入框挂工具条（粘贴/清空/字号/全选/导出 + Ctrl+A/S）+ 快捷键。
-  wrap.append(attachEditorToolbar(inArea, { onChange: () => { rState.input = inArea.value; maybeRunChain(); }, exportName: "recipe-input.txt" }));
+  wrap.append(attachEditorToolbar(inArea, { onChange: () => { rState.file = null; rState.input = inArea.value; maybeRunChain(); }, exportName: "recipe-input.txt" }));
   wrap.append(inArea);
 
  // 大输入挂起提示——超阈值时改动只标记待执行（不即时重跑），提示用户点工具条的 Bake 按钮。
@@ -743,6 +840,12 @@ export function addRecipeFamilyAt(familyId, clientX, clientY) {
   return true;
 }
 
+export function openRecipeFamilyAtTail(familyId, clientX, clientY) {
+  if (!document.getElementById("recipeChain")) return false;
+  openFamilyPicker(familyId, clientX, clientY, null);
+  return true;
+}
+
 // ---- 族选档菜单（T395）：族条目拖入画布时选具体算法 ----
 let _famPickMenu = null;
 function closeFamilyPicker() {
@@ -756,11 +859,10 @@ function _famPickOutside(e) {
 function _famPickKey(e) { if (e.key === "Escape") closeFamilyPicker(); }
 function openFamilyPicker(familyId, clientX, clientY, idx) {
   closeFamilyPicker();
-  const famName = FAMILY_NAMES[familyId] || familyId;
   const members = OPS.filter((o) => o.family === familyId);
   if (!members.length) return;
   const menu = el("div", { class: "fam-pick-menu", role: "menu" },
-    el("div", { class: "fam-pick-head" }, `把「${famName}」的哪一步加入配方链？`),
+    el("div", { class: "fam-pick-head" }, tt("ui.recipe.chooseFamilyOp")),
     ...members.map((m) => el("button", {
       class: "fam-pick-item",
       type: "button",
@@ -777,10 +879,8 @@ function openFamilyPicker(familyId, clientX, clientY, idx) {
   menu.style.left = Math.max(8, Math.min(clientX, vw - r.width - 8)) + "px";
   menu.style.top = Math.max(8, Math.min(clientY, vh - r.height - 8)) + "px";
   _famPickMenu = menu;
-  setTimeout(() => {
-    document.addEventListener("pointerdown", _famPickOutside, true);
-    document.addEventListener("keydown", _famPickKey, true);
-  }, 0);
+  document.addEventListener("pointerdown", _famPickOutside, true);
+  document.addEventListener("keydown", _famPickKey, true);
 }
 
 export { rState };

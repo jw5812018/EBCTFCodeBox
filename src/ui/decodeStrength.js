@@ -33,6 +33,7 @@ import {
   isBruteOp,
 } from "../core/decodeProfile.js";
 import { icon as iconSvg } from "./icons.js";
+import { attachModalLifecycle } from "./modalLifecycle.js";
 
 // ---- 轻量 DOM 工具（与 envPanel.js 同形；注意 false 不当属性写，防 disabled="false" 坑）----
 function el(tag, attrs = {}, ...children) {
@@ -118,7 +119,7 @@ function catLabel(catId, fallback) {
 // 弹窗状态
 // ============================================================
 let _overlay = null;
-let _keyHandler = null;
+let _lifecycle = null;
 let _debounce = null;
 
 /**
@@ -128,7 +129,7 @@ let _debounce = null;
  *   onApply  (cfg) => void  点「应用」回调，传回两套作用域的完整配置
  */
 export function openDecodeStrength(opt = {}) {
-  closeDecodeStrength();
+  closeDecodeStrength(true);
 
   // 工作副本：合并文本+文件为统一配置。改动只在此弹窗内，点「应用」才回传。
   const src = (opt.cfg && opt.cfg.text) || {};
@@ -485,22 +486,24 @@ export function openDecodeStrength(opt = {}) {
   renderBody();
 
   _overlay = el("div", { class: "ds-overlay" }, dialog);
-  // 点遮罩空白处关闭（点弹窗内部不关）
-  _overlay.addEventListener("click", (e) => { if (e.target === _overlay) closeDecodeStrength(); });
   document.body.append(_overlay);
-
-  _keyHandler = (e) => { if (e.key === "Escape") closeDecodeStrength(); };
-  document.addEventListener("keydown", _keyHandler);
+  _lifecycle = attachModalLifecycle(_overlay, { dialog, onClose: closeDecodeStrength });
 
   // 焦点进弹窗（键盘/读屏可达）
   setTimeout(() => { try { dialog.querySelector(".ds-slider").focus(); } catch { /* 忽略 */ } }, 0);
 }
 
 /** 关闭弹窗。 */
-export function closeDecodeStrength() {
-  if (_keyHandler) { document.removeEventListener("keydown", _keyHandler); _keyHandler = null; }
+export function closeDecodeStrength(immediate = false) {
+  if (_lifecycle) { _lifecycle.release(); _lifecycle = null; }
   clearTimeout(_debounce);
-  if (_overlay) { _overlay.remove(); _overlay = null; }
+  const ov = _overlay;
+  _overlay = null;
+  if (!ov) return;
+  if (immediate || ov._closing) { ov.remove(); return; }
+  ov._closing = true;
+  ov.classList.add("ds-closing");
+  setTimeout(() => { if (ov.isConnected) ov.remove(); }, 250);
 }
 
 /** 档位显示名（首页按钮上显示当前档用）。 */

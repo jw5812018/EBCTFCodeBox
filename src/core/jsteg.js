@@ -1,5 +1,5 @@
 /*
- * jsteg.js — jsteg JPEG 隐写 编/解（cat:'stego'，encode/decode 双向 op）。
+ * jsteg.js — jsteg JPEG 隐写 编/解（cat:'image'，encode/decode 双向 op）。
  *
  * 做什么：encode 把消息按 jsteg 口径顺序覆盖 DCT 系数 LSB，经 jpegRewrite
  * 重写扫描数据后输出 jsteg.jpg；decode 从 JPEG 系数里顺序读 LSB 还原消息。
@@ -416,7 +416,7 @@ function jstegDecodeOp(text, p) {
 // ============================================================
 register({
   id: "jsteg",
-  cat: "stego",
+  cat: "stegoFile",
   name: "jsteg JPEG 隐写 编/解",
   desc: "jsteg 隐写双向工具：encode 把消息顺序写入 DCT 系数 LSB（跳过 0 与 ±1，幅值翻转符号不变，避免产生 0），重新 Huffman 编码回写 JPEG（标记段原样保留）；decode 顺序读 LSB 还原消息。封装 = \"jsteg\" 魔数 + LE32 长度，兼容原版 jsteg CLI 的 hide/reveal。仅基线单扫描 JPEG，渐进式报错。纯前端零外发",
   acceptsBytes: true,

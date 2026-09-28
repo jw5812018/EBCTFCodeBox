@@ -243,3 +243,8 @@ export function magicFilterBar(wrap, matched, total) {
   }
   return state.bar;
 }
+
+export function resultSearchState(wrap) {
+  const state = stateByWrap.get(wrap);
+  return { query: state?.query || "", caseSensitive: !!state?.caseSensitive };
+}

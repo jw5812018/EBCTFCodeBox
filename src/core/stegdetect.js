@@ -1,5 +1,5 @@
 /*
- * stegdetect.js — JPEG 隐写检测（cat:'analysis'，run 型单向分析）。
+ * stegdetect.js — JPEG 隐写检测（cat:'stego'，run 型单向分析）。
  *
  * 做什么：对一张 JPEG 统计 DCT 系数分布，跑 chi-square 卡方攻击（Westfeld/Pfitzmann），
  * 叠加 jsteg（顺序 LSB）与 F5（直方图收缩）两类特征启发式，输出「检出/未检出」结论
@@ -37,7 +37,6 @@
  * 复用：JPEG 解析直接 import f5stego.js 的 parseJpeg（勿重写解析器）。
  * 红线遵守：纯前端零外发；件内自注册；报告无 emoji（● ✓ ▸ × ✗ ⚠）。
  */
-import { register } from "./registry.js";
 import { parseJpeg, parseInput, pickComponent } from "./f5stego.js";
 import { analyzeScans } from "./jpegRewrite.js";
 
@@ -383,32 +382,7 @@ function stegdetectRun(text, p) {
 }
 
 // ============================================================
-// 注册
+// 导出（stegdetect 已并入统一「隐写检测」op，不再自我注册）
 // ============================================================
-register({
-  id: "stegdetect",
-  cat: "analysis",
-  name: "stegdetect 隐写检测",
-  desc: "JPEG 隐写检测近似实现（非原版 stegdetect）：chi-square 卡方攻击（Westfeld/Pfitzmann 口径）+ jsteg 顺序 LSB 特征 + F5 直方收缩特征，输出检出/未检出结论与卡方 p 值、累计曲线、分块分布、直方特征供人工复核。纯前端零外发",
-  acceptsBytes: true,
-  params: [
-    {
-      key: "comp", label: "分析分量", type: "select", default: "y",
-      options: [
-        { value: "y", label: "仅 Y 亮度分量（快，jsteg/F5 主战场）" },
-        { value: "all", label: "全部分量（Y+Cb+Cr，更全但更慢）" },
-      ],
-    },
-    {
-      key: "sens", label: "阈值灵敏度", type: "select", default: "std",
-      options: [
-        { value: "loose", label: "宽松（p≥0.2 即判出，易误报）" },
-        { value: "std", label: "标准（p≥0.5）" },
-        { value: "strict", label: "严格（p≥0.8，更少误报）" },
-      ],
-    },
-  ],
-  run: stegdetectRun,
-});
 
 export { stegdetectRun, chi2SF, chiSquareFromHist, mapCoeff, cumulativeChi2, chunkedChi2, shrinkMetrics };

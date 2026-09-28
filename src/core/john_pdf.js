@@ -1,5 +1,5 @@
 /*
- * john_pdf.js — PDF /Encrypt 字典 → John/hashcat hash 串提取（T290，cat:'forensic'，单向 run）。
+ * john_pdf.js — PDF /Encrypt 字典 → John/hashcat hash 串提取（T290，cat:'crack'，单向 run）。
  *
  * 用途：CTF 取证里拿到加密 PDF，想用 John the Ripper / hashcat 离线爆破口令。
  * 本 op 只提取 hash 串（不爆破），输出可直接喂给 john/hashcat 的 $pdf$ 格式。
@@ -289,7 +289,7 @@ function pdf2johnRun(text, p = {}) {
 
 register({
   id: "pdf2john",
-  cat: "forensic",
+  cat: "crack",
   name: "PDF 哈希提取（pdf2john）",
   desc: "从加密 PDF 的 /Encrypt 字典提取 John/hashcat 格式 $pdf$ hash 串（只提取不爆破）。照 openwall john 官方 pdf2john 格式，支持 R2-R6（RC4 / AES-128 / AES-256）。输出可直接喂 john/hashcat 离线爆破",
   params: [

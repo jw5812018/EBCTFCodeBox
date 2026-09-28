@@ -55,6 +55,15 @@
  */
 
 import { register } from "./registry.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ============================================================
 // 参数集（来源见文件头；字段名与 [L] encparams.c 一致）
@@ -600,7 +609,7 @@ register({
     const msg = ntruDecrypt(set, parts, e);
     let text;
     try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(msg);
+      text = _decodeUtf8Fatal(msg);
     } catch {
       text = `（非 UTF-8，输出 hex）${bytesToHex(msg)}`;
     }

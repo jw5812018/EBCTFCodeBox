@@ -10,7 +10,7 @@ export default {
   "op.base16.desc": "Hexadecimal encoding, each byte as two hex chars, supports custom alphabet, uppercase, and space separator.",
   "op.base32.desc": "RFC 4648 Base32 encoding, 5-bit grouping, supports custom alphabet.",
   "op.base36.desc": "Treats whole bytes as a big integer, converts to base-36 string using 0-9a-z.",
-  "op.base45.desc": "RFC 9285 Base45 encoding, 2 bytes to 3 chars, common in QR codes.",
+  "op.base45.desc": "RFC 9285 Base45 encoding, 2 bytes to 3 chars, common in QR codes. Space is a data character with value 36 (not a separator); triplets decoding above 65535 MUST be rejected per RFC 9285 section 6.",
   "op.base58.desc": "Base58 encoding (Bitcoin alphabet), omits ambiguous chars, supports custom alphabet.",
   "op.base62.desc": "Base62 encoding using 0-9A-Za-z charset, supports custom alphabet.",
   "op.base64.desc": "Standard Base64 encoding, supports URL-safe variant and custom alphabet.",
@@ -75,7 +75,7 @@ export default {
   "op.lsbImage.desc": "LSB pixel steganography: writes data into image pixel least significant bits, first 32 bits store length, supports R/G/B/A channel selection.",
 
  // ---- fancy / CTF encoding ----
-  "op.morse.desc": "Morse code (ITU-R M.1677): letters/digits/punctuation mapped to dots and dashes, / separates words.",
+  "op.morse.desc": "Morse code (ITU-R M.1677): letters/digits/punctuation mapped to dots and dashes, / separates words. The table adds a few non-ITU punctuation marks (! ; & _ $ and { } * # %; & and % share shapes with ITU prosigns but differ in meaning); a token that is neither dots/dashes nor a table code is ignored as a whole.",
   "op.bacon.desc": "Bacon cipher: each letter as 5-bit a/b string, supports 24-letter (I=J, U=V) and 26-letter versions.",
   "op.railFence.desc": "Rail Fence cipher: W-zigzag written across rails then read row by row, parameter is rail count.",
   "op.caesar.desc": "Caesar cipher: shifts letters by given amount, encrypt +shift, decrypt -shift.",

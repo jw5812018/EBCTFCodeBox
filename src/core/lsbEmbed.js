@@ -1,5 +1,5 @@
 /*
- * lsbEmbed.js — LSB 嵌入（出题）（cat:'stego'，P1 批，单向 run）。
+ * lsbEmbed.js — LSB 嵌入（出题）（cat:'image'，P1 批，单向 run）。
  *
  * 解决什么：把一段载荷（文本）写进封面图指定位平面的最低有效位，生成隐写图
  * （PNG）。用于出 misc 题——先做一张 LSB 隐写图，配合本工具另一张
@@ -216,7 +216,7 @@ export function makeSolidPng(width, height, rgba) {
 // ============ register ============
 
 register({
-  id: "lsbEmbed", cat: "stego", name: "LSB 嵌入（出题）",
+  id: "lsbEmbed", cat: "stegoFile", name: "LSB 嵌入（出题）",
   desc: "把载荷文本写进封面图（PNG/BMP）指定位平面的最低有效位，生成隐写图 PNG（通道顺序/位平面/位序与 zstegScan 一一对应，出 misc 题用）",
   params: [
     { key: "inputEnc", label: "封面输入编码（文本输入时）", type: "select", default: "auto",

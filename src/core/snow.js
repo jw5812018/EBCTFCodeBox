@@ -18,6 +18,15 @@
  * 对拍验证：与 tools/exe/cli/snow.exe 三档（明文 / -C / -p）双向互通，见回执。
  */
 import { register } from "./registry.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 /* ------------------------------------------------------------------ *
  * ICE 加密算法（ice.c 完整移植）
@@ -624,7 +633,7 @@ function snowDecode(text, opts) {
 	}
 	const u8 = new Uint8Array(bytes);
 	try {
-		return new TextDecoder("utf-8", { fatal: true }).decode(u8);
+		return _decodeUtf8Fatal(u8);
 	} catch (e) {
 		return {
 			text: "(二进制负载，" + u8.length + " 字节，点击下载)",
@@ -639,7 +648,7 @@ function snowDecode(text, opts) {
 
 register({
 	id: "snow",
-	cat: "stego",
+	cat: "stegoText",
 	name: "SNOW 空白隐写",
 	desc: "行尾空白隐写（原版 mattkwan/snow 格式）：TAB 标记数据起点，每 3bit 编码为 TAB+空格串，行宽 8 列对齐。支持 -C Huffman 压缩与 -p ICE 加密，与 snow.exe 双向互通。encode: 消息+容器→隐写文本；decode: 隐写文本→消息",
 	params: [

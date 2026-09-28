@@ -7,7 +7,7 @@
  * - icAnalysis 重合指数 IC（整体 IC + 分组 IC → 判单表/多表替换 + Vigenère key 长估计）
  * - kasiskiTest Kasiski 检验（重复 n-gram 间隔 GCD → Vigenère key 长候选）
  * - chiSquareAnalysis 卡方检验（密文 vs 英语字母频率，字母级详细对比）
- * - subCipherSolver 单表替换自动求解（爬山算法 + 四元组打分）
+ * - subCipherSolver 单表替换自动求解（N-gram 适应度迭代局部搜索，内核委托 cryptanalysis2 共用）
  * - caesarBrute 凯撒/ROT 自动求位移（卡方 + 四元组联合打分，26 位移排名）
  *
  * 红线：
@@ -24,6 +24,7 @@
  */
 import { register } from "./registry.js";
 import { EN as EN_BYTE_FREQ } from "./magic/langfreq.js";
+import { substitutionHillClimb } from "./cryptanalysis2.js";
 
 // ============================================================
 // 1. 单字母频率表（A-Z，百分比 0-100）
@@ -351,7 +352,10 @@ function chiSquareAnalysis(text, p) {
 }
 
 // ============================================================
-// op 5: subCipherSolver — 单表替换自动求解（爬山 + 四元组打分）
+// op 5: subCipherSolver — 单表替换自动求解
+// 内核委托 cryptanalysis2.js 的 substitutionHillClimb（穷举对序爬山 + ILS 扰动重启 + quad/tri/bi 三层
+// 适应度 + 重入，与 playfairCrack 共用同一套评分基建）；本文件只做入口：
+// 已知映射锁定解析、频率对齐初始化、多重启编排与报告输出。
 // ============================================================
 // key 为 26 字母的置换字符串：密文字母 (65+i) → 明文字母 key[i]
 function applySub(text, key) {
@@ -369,74 +373,97 @@ function subCipherSolver(text, p) {
   const iterations = Math.max(100, Math.min(100000, Number((p && p.iterations) || 10000)));
   const restarts = Math.max(1, Math.min(20, Number((p && p.restarts) || 5)));
   const seed = Number((p && p.seed) || 12345);
+  const knownStr = String((p && p.known) || "").trim();
   const s = text.toUpperCase();
   const cleanS = cleanAlpha(text);
   if (cleanS.length < 10) return "单表替换求解: 密文过短（需 ≥10 字母）";
 
- // 按密文字母频率降序
+ // 已知映射：格式「密文=明文」，多对用逗号/分号/空格分隔（如 XH=TH,QM=IN，只取字母）
+  const locked = new Map();
+  if (knownStr) {
+    for (const pair of knownStr.split(/[,;\s]+/).filter(Boolean)) {
+      const m = pair.match(/^([A-Za-z]+)=([A-Za-z]+)$/);
+      if (!m || m[1].length !== m[2].length) {
+        return `单表替换求解: 已知映射「${pair}」格式不认识，应为 密文=明文（等长，如 XH=TH）`;
+      }
+      for (let i = 0; i < m[1].length; i++) {
+        const c = m[1].toUpperCase().charCodeAt(i) - 65;
+        const pl = m[2].toUpperCase().charCodeAt(i) - 65;
+        if (locked.has(c) && locked.get(c) !== pl) {
+          return `单表替换求解: 已知映射冲突——密文 ${String.fromCharCode(65 + c)} 同时映射到 ${String.fromCharCode(65 + locked.get(c))} 与 ${String.fromCharCode(65 + pl)}`;
+        }
+        locked.set(c, pl);
+      }
+    }
+    if (new Set(locked.values()).size !== locked.size) {
+      return "单表替换求解: 已知映射的明文字母有重复，不构成合法单表替换";
+    }
+  }
+
+ // 初始 key：锁定对先落位，其余按密文频率 ↔ 英语频率对齐（密文最高频 → 英语最高频）
   const cipherFreq = new Array(26).fill(0);
   for (const ch of cleanS) cipherFreq[ch.charCodeAt(0) - 65]++;
   const cipherOrder = cipherFreq
     .map((f, i) => [f, i])
+    .filter(([, i]) => !locked.has(i))
     .sort((a, b) => b[0] - a[0])
     .map((x) => x[1]);
-
- // 英语字母频率降序
   const engOrder = UNIGRAM_EN.map((f, i) => [f, i])
+    .filter(([, i]) => ![...locked.values()].includes(i))
     .sort((a, b) => b[0] - a[0])
     .map((x) => x[1]);
-
-  let bestKey = null;
-  let bestScore = -Infinity;
-
-  for (let r = 0; r < restarts; r++) {
-    const rng = makeRng(seed + r * 7919);
-
- // 初始 key：按频率对齐（密文最高频字母 → 英语最高频字母）
-    const key = new Array(26);
-    for (let i = 0; i < cipherOrder.length; i++) {
-      key[cipherOrder[i]] = String.fromCharCode(65 + engOrder[i]);
-    }
- // 剩余位置（密文中未出现的字母）填充
-    const used = new Set(key.filter(Boolean));
+  const baseKey = new Array(26).fill(null);
+  for (const [c, pl] of locked) baseKey[c] = String.fromCharCode(65 + pl);
+  for (let i = 0; i < cipherOrder.length; i++) {
+    baseKey[cipherOrder[i]] = String.fromCharCode(65 + engOrder[i]);
+  }
+ // 兜底填充（密文未出现的字母位）
+  {
+    const used = new Set(baseKey.filter(Boolean));
     let fillIdx = 0;
     for (let i = 0; i < 26; i++) {
-      if (!key[i]) {
+      if (!baseKey[i]) {
         while (used.has(String.fromCharCode(65 + fillIdx))) fillIdx++;
-        key[i] = String.fromCharCode(65 + fillIdx);
-        used.add(key[i]);
+        baseKey[i] = String.fromCharCode(65 + fillIdx);
+        used.add(baseKey[i]);
         fillIdx++;
       }
     }
-
-    let currentScore = scoreQuad(applySub(cleanS, key.join("")));
-
- // 爬山：随机交换两个映射，保留更好的
-    for (let it = 0; it < iterations; it++) {
-      const i = Math.floor(rng() * 26);
-      const j = Math.floor(rng() * 26);
-      if (i === j) continue;
-      const newKey = key.slice();
-      [newKey[i], newKey[j]] = [newKey[j], newKey[i]];
-      const newScore = scoreQuad(applySub(cleanS, newKey.join("")));
-      if (newScore > currentScore) {
-        key.splice(0, key.length, ...newKey);
-        currentScore = newScore;
-      }
-    }
-
-    if (currentScore > bestScore) {
-      bestScore = currentScore;
-      bestKey = key.slice();
-    }
   }
 
-  const decrypted = applySub(s, bestKey.join(""));
+ // 多重启：首重启用频率对齐起点，其余只在非锁定字母池内乱序（锁定位不动）
+  let best = null;
+  for (let r = 0; r < restarts; r++) {
+    let startKey = baseKey;
+    if (r > 0) {
+      const k = baseKey.slice();
+      const freeC = [], freeP = [];
+      for (let i = 0; i < 26; i++) if (!locked.has(i)) { freeC.push(i); freeP.push(k[i]); }
+      const rngS = makeRng(seed + r * 7919);
+      for (let i = freeP.length - 1; i > 0; i--) {
+        const j = Math.floor(rngS() * (i + 1));
+        [freeP[i], freeP[j]] = [freeP[j], freeP[i]];
+      }
+      freeC.forEach((c, idx) => { k[c] = freeP[idx]; });
+      startKey = k;
+    }
+    const res = substitutionHillClimb(cleanS, {
+      iterations, seed: seed + r * 7919, startKey, locked: locked.size ? locked : null,
+    });
+    if (!best || res.fitness > best.fitness) best = res;
+  }
+
+  const bestKey = best.key;
+  const decrypted = applySub(s, bestKey);
   const lines = [];
-  lines.push("=== 单表替换自动求解（爬山 + 四元组打分）===");
+  lines.push("=== 单表替换自动求解（N-gram 适应度 + 迭代局部搜索）===");
   lines.push(`密文字母数: ${cleanS.length}`);
-  lines.push(`爬山迭代: ${iterations} × ${restarts} 次重启`);
-  lines.push(`最佳得分: ${bestScore.toFixed(2)}`);
+  lines.push(`迭代: ${iterations} × ${restarts} 次重启（穷举对序爬山 + 扰动重启）`);
+  if (locked.size) {
+    lines.push(`已知映射锁定 ${locked.size} 对: ` + [...locked].map(([c, pl]) =>
+      `${String.fromCharCode(65 + c)}→${String.fromCharCode(65 + pl)}`).join(" "));
+  }
+  lines.push(`最佳适应度: ${best.fitness.toFixed(2)}　解密结果 IC: ${icOf(decrypted).toFixed(4)}（英语明文 ≈ 0.0667）`);
   lines.push("");
   lines.push("=== 求解映射（密文 → 明文）===");
   const mapLine = [];
@@ -447,7 +474,7 @@ function subCipherSolver(text, p) {
   lines.push("=== 解密结果 ===");
   lines.push(decrypted);
   lines.push("");
-  lines.push("提示: 爬山为启发式，不保证全局最优。如结果不佳可增加迭代/重启次数或换随机种子。");
+  lines.push("提示: 爬山 + 扰动重启为启发式，不保证全局最优。把确认正确的字母填入「已知映射」（如 XH=TH）可锁定加速收敛；结果不佳可增加迭代/重启次数或换随机种子。");
 
   return lines.join("\n");
 }
@@ -581,7 +608,7 @@ register({
   id: "subCipherSolver",
   cat: "analysis",
   name: "单表替换自动求解",
-  desc: "爬山算法 + 四元组打分自动破解单表替换密码",
+  desc: "N-gram 适应度爬山（迭代局部搜索）自动破解单表替换密码，可锁定已知映射加速",
   params: [
     {
       key: "iterations",
@@ -592,6 +619,7 @@ register({
     },
     { key: "restarts", label: "随机重启", type: "number", default: 5, placeholder: "1-20" },
     { key: "seed", label: "随机种子", type: "number", default: 12345 },
+    { key: "known", label: "已知映射", type: "text", default: "", placeholder: "可选，密文=明文，如 XH=TH,QM=IN（锁定后加速收敛）" },
   ],
   run: subCipherSolver,
 });

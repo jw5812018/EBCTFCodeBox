@@ -1,5 +1,5 @@
 /*
- * esolang2.js — esolang 扩展组（cat:'fancy'，T83）。
+ * esolang2.js — esolang 扩展组（cat:'esolang'，T83）。
  * Deadfish 双向、Befunge-93 执行器、Emojicode 识别、Piet 识别。
  *
  * 红线：不与 fancy.js/fancy2.js/fancy3.js 已有的 brainfuck/ook/whitespace/

@@ -196,7 +196,8 @@ function looksPrintable(bytes) {
 // encode：文本 → BinHex 4.0
 // ============================================================
 function binhexEncode(text, p = {}) {
-  const data = Array.from(te(text));
+  // 字节直通：BinHex 本是二进制→文本编码，上游真字节直接封进数据叉。
+  const data = Array.from((p && p.rawBytes) || te(text));
   let fname = (p && p.filename != null && String(p.filename).trim()) ? String(p.filename).trim() : "file.txt";
   const fnameBytes = Array.from(te(fname)).slice(0, 63); // 文件名长度 1 字节
   const type = te("TEXT"); // 4CC
@@ -310,6 +311,8 @@ function binhexDecode(text) {
 register({
   id: "binhex",
   cat: "text",
+  // encode 方向吃字节（BinHex 本是二进制→文本编码）；decode 输入是 BinHex 文本，不吃字节。
+  acceptsBytes: true,
   name: "BinHex 4.0 编 / 解码",
   desc: "Mac BinHex 4.0（Yves Lempereur 规范 + Python binhex）：6-bit 码表 + RLE90 压缩 + CRC-16-CCITT。decode 解析文件名/type/creator/数据叉/资源叉并校验三处 CRC；encode 把 UTF-8 文本封成合规 BinHex（数据叉，空资源叉）。",
   params: [

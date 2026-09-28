@@ -1,3 +1,4 @@
+import { createTargetEditor, renderCandidateRow } from "./smartResultView.js";
 // exhaustiveView.js — 穷举全解视图（一键穷举）
 // 与「一把梭智能识别(magic)」并列的第二范式：每个解码器全跑全列，flag 高亮让人眼扫。
 // 复用 core/exhaustiveDecode.js。独立模块，自带轻量 el/msym，不反向依赖 main.js（低耦合）。
@@ -106,6 +107,7 @@ export function renderExhaustive(container) {
     ),
   );
 
+  const targetEditor = createTargetEditor();
   const statBar = el("div", { class: "exhaust-stat" });
   const out = el("div", { class: "exhaust-out" });
 
@@ -120,6 +122,7 @@ export function renderExhaustive(container) {
     const seq = ++_seq;
     statBar.textContent = tt("ui.exhaust.running");
     const r = await exhaustiveDecode(q, {
+      targets: targetEditor.getTargets(),
       onlyChanged: true,
       onlyPrintable: eState.hideGarbage,
     });
@@ -150,7 +153,7 @@ export function renderExhaustive(container) {
     run();
   });
 
-  wrap.append(input, toolbar, statBar, out);
+  wrap.append(input, targetEditor.element, toolbar, statBar, out);
   container.append(wrap);
   input.focus();
   if ((eState.input || "").trim()) setTimeout(run, 0);
@@ -188,13 +191,17 @@ function renderResults(out, statBar, r) {
 
 function isHit(it) { return it.isFlagFormat || it.flagHit || it.matchesCrib; }
 
-// 算法折叠卡片：<details> 头显示算法名 + 分支数 + 命中数；命中组或 onlyHit 时默认展开。
+// 算法折叠卡片：<details> 头显示算法名 + 爆破参数名 + 分支数 + 命中数；命中组或 onlyHit 时默认展开。
 function renderAlgo(a, wantOnlyHit) {
   const open = a.hasStrongHit || wantOnlyHit;
   const box = el("details", { class: "exhaust-algo" + (a.hasStrongHit ? " has-hit" : "") });
   if (open) box.setAttribute("open", "");
 
-  const parts = [tt("ui.exhaust.branchCount", a.items.length)];
+  // 汇总本组分支实际扫过的参数名（如 shift），随分支数一并标注
+  const sweepParams = [...new Set(a.items.flatMap((it) =>
+    String(it.paramTag || "").split(",").map((s) => s.trim().split("=")[0]).filter(Boolean)))];
+  const parts = [tt("ui.exhaust.branchCount", a.items.length) +
+    (sweepParams.length ? `（${sweepParams.join(" / ")}）` : "")];
   if (a.hitCount > 0) parts.push(tt("ui.exhaust.hitCount", a.hitCount));
   const summary = el("summary", { class: "exhaust-algo-head" },
     el("span", { class: "exhaust-algo-name" }, opDisplayName(a.baseOpId)),
@@ -209,25 +216,7 @@ function renderAlgo(a, wantOnlyHit) {
 
 // 单行：参数标签（如 shift=3）+ 结果（flag 高亮）。点击复制。
 function renderRow(it) {
-  const row = el("div", { class: "exhaust-row" + (it.ok ? "" : " err") + (it.isFlagFormat ? " flag-format" : (it.flagHit || it.matchesCrib ? " flag-hit" : "")) });
-  const label = it.paramTag || tt("ui.exhaust.defaultParam");
-  const name = el("span", { class: "exhaust-op exhaust-param" }, label);
-  let valEl;
-  if (!it.ok) {
-    valEl = el("span", { class: "exhaust-val exhaust-err-val" }, msym("cancel"), " " + (it.error || ""));
-  } else {
-    const full = it.result || "";
-    const shown = full.length > 300 ? full.slice(0, 300) + " …" : full;
-    valEl = el("span", { class: "exhaust-val" + (it.printable < 0.5 ? " garbage" : "") }, shown);
-    row.setAttribute("title", tt("ui.exhaust.copyHint"));
-    row.addEventListener("click", (e) => {
-      e.stopPropagation();
-      navigator.clipboard?.writeText(full);
-      if (typeof window !== "undefined" && window.__ebctfToast) window.__ebctfToast(tt("ui.exhaust.copied"));
-    });
-  }
-  row.append(name, el("span", { class: "exhaust-sep" }, ":"), valEl);
-  return row;
+  return renderCandidateRow(it, { copied: () => window.__ebctfToast?.(tt("ui.exhaust.copied")) });
 }
 
 export { eState };

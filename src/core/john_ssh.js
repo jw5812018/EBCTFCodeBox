@@ -1,5 +1,5 @@
 /*
- * john_ssh.js — SSH 私钥 → John hash 串提取（T292，cat:'forensic'，单向 run）。
+ * john_ssh.js — SSH 私钥 → John hash 串提取（T292，cat:'crack'，单向 run）。
  *
  * 用途：CTF 取证里拿到加密 SSH 私钥，想用 John the Ripper 离线爆破密码。
  * 本 op 只提取 hash 串（不爆破），输出可直接喂给 john 的 $sshng$ 格式。
@@ -449,7 +449,7 @@ function sshkey2johnRun(text, p = {}) {
 // ============================================================
 register({
   id: "sshkey2john",
-  cat: "forensic",
+  cat: "crack",
   name: "SSH 私钥哈希提取（sshkey2john）",
   desc: "从 SSH 私钥（OpenSSH 新格式 / PEM 传统 RSA/DSA/EC）提取 John $sshng$ 格式 hash 串（只提取不爆破）。OpenSSH 加密用 bcrypt+AES-256；PEM 用 DEK-Info 指定的 cipher+IV。输出可直接喂 john/hashcat 离线爆破",
   params: [],

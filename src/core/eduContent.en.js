@@ -48,6 +48,7 @@ import E_EN_EDU_CLASSIC_NEW from "./edu-en/edu-classic-new.en.js";
 import E_EN_EDU_CLASSIC_REST from "./edu-en/edu-classic-rest.en.js";
 import E_EN_EDU_CLASSIC1 from "./edu-en/edu-classic1.en.js";
 import E_EN_EDU_CLASSIC2 from "./edu-en/edu-classic2.en.js";
+import EDU_EN_CLASSIC_DISKS_TRANSPOSITION from "./edu-en/edu-classic-disks-transposition.en.js";
 import E_EN_EDU_CRYPTO_PG from "./edu-en/edu-crypto-pg.en.js";
 import E_EN_EDU_EXE from "./edu-en/edu-exe.en.js";
 import E_EN_EDU_FANCY_CN from "./edu-en/edu-fancy-cn.en.js";
@@ -79,11 +80,19 @@ import E_EN_EDU_RADIX_TIME from "./edu-en/edu-radix-time.en.js";
 import E_EN_EDU_STEGO_IMAGE from "./edu-en/edu-stego-image.en.js";
 import E_EN_EDU_STEGO_QR_AUDIO from "./edu-en/edu-stego-qr-audio.en.js";
 import E_EN_EDU_STEGO_TEXT from "./edu-en/edu-stego-text.en.js";
+import E_EN_EDU_STEGO_DETECT from "./edu-en/edu-stego-detect.en.js";
+import E_EN_EDU_QR_SCAN_IMAGE from "./edu-en/edu-qrscanimage.en.js";
 import E_EN_EDU_UNIFIED_MISC from "./edu-en/edu-unified-misc.en.js";
 import E_EN_EDU_T508 from "./edu-en/edu-t508.en.js";
 import E_EN_EDU_T508_B4 from "./edu-en/edu-t508-b4.en.js";
 import E_EN_EDU_T508_B2 from "./edu-en/edu-t508-b2.en.js";
 import E_EN_EDU_T508_B3 from "./edu-en/edu-t508-b3.en.js";
+import E_EN_EDU_PIP_ASTRO from "./edu-en/edu-pipAstro.en.js";
+import E_EN_EDU_STEGHIDE from "./edu-en/edu-steghide.en.js"; // steghide (1)
+import E_EN_EDU_PCAP_FIELDS from "./edu-en/edu-pcap-fields.en.js"; // pcap field extract (1)
+import E_EN_EDU_GIFSHUFFLE from "./edu-en/edu-gifshuffle.en.js"; // GifShuffle (1)
+import E_EN_EDU_OUTGUESS from "./edu-en/edu-outguess.en.js"; // OutGuess 0.4 (1)
+import E_EN_EDU_BLINDWM2 from "./edu-en/edu-blindwm2.en.js";
 
 const EDU_EN = Object.assign(
   {},
@@ -91,6 +100,12 @@ const EDU_EN = Object.assign(
   E_EN_EDU_T508_B4,
   E_EN_EDU_T508_B2,
   E_EN_EDU_T508_B3,
+  E_EN_EDU_PIP_ASTRO,
+  E_EN_EDU_BLINDWM2,
+  E_EN_EDU_OUTGUESS,
+  E_EN_EDU_GIFSHUFFLE,
+  E_EN_EDU_PCAP_FIELDS,
+  E_EN_EDU_STEGHIDE,
   E_EN_EDU_ANA_CRYPTO_NEW,
   EDU_EN_TEXT_BUBBLE,
   EDU_EN_TEXT_JSESCAPE,
@@ -118,6 +133,7 @@ const EDU_EN = Object.assign(
   E_EN_EDU_CLASSIC_REST,
   E_EN_EDU_CLASSIC1,
   E_EN_EDU_CLASSIC2,
+  EDU_EN_CLASSIC_DISKS_TRANSPOSITION,
   EDU_EN_CRYPTO_PG,
   EDU_EN_CRYPTO_B,
   E_EN_EDU_EXE,
@@ -151,6 +167,8 @@ const EDU_EN = Object.assign(
   E_EN_EDU_STEGO_IMAGE,
   E_EN_EDU_STEGO_QR_AUDIO,
   E_EN_EDU_STEGO_TEXT,
+  E_EN_EDU_STEGO_DETECT,
+  E_EN_EDU_QR_SCAN_IMAGE,
   E_EN_EDU_UNIFIED_MISC,
   E_EN_CTF_CIPHER_EXT,
 );

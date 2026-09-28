@@ -1,5 +1,5 @@
 /*
- * spectrogram.js — 音频频谱图（WAV → STFT 频谱 PNG，cat:'stego'，run 型单向分析）。
+ * spectrogram.js — 音频频谱图（WAV → STFT 频谱 PNG，cat:'audio'，run 型单向分析）。
  *
  * 定位：CTF 音频隐写高频杀器。出题人把 flag/文字画进音频频域（Audacity/Sonic
  * Visualiser 的 spectrogram 视图能看见），本 op 纯前端算 STFT 生成频谱图 PNG
@@ -229,7 +229,7 @@ function spectrogramRun(text, p) {
 
 register({
   id: "spectrogram",
-  cat: "stego",
+  cat: "audio",
   name: "音频频谱图（STFT）",
   desc: "WAV → 短时傅里叶变换频谱图 PNG：Hann 窗 + radix-2 FFT，magma 色阶渲染，肉眼读频域藏字（CTF 音频隐写把 flag 画进频谱）。纯前端免装 Audacity",
   params: [

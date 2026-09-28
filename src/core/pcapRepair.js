@@ -99,6 +99,218 @@ const MAGICS = {
 const GLOBAL_HDR_LEN = 24;
 const REC_HDR_LEN = 16;
 
+// ============================================================
+// pcapng 块级保守修复（规范：draft-tuexen-opsawg-pcapng）
+// 块布局：Block Type(4) + Block Total Length(4) + Body + Block Total Length(4)
+// 长度含全部四个字段、4 字节对齐、最小 12。SHB 的 BOM(偏移 8)=0x1A2B3C4D 定字节序。
+// 修复只做有证据的六类；歧义只诊断不补造：
+//  R1 SHB BOM 损毁（magic 完好）：按块链在两种字节序下的可解性重写 BOM（两种都通=歧义→只诊断）
+//  R2 SHB magic 损毁（BOM/长度字段完好）：重写 0A0D0D0A
+//  R3 SHB 整体缺失（数据从 IDB/EPB 等块开始）：前插 28 字节标准 SHB（v1.0 / section_len 未指定；
+//     原头部选项无从恢复 → 只保证修后可解析，不承诺逐字节还原）
+//  R4 尾部长度与首部长度不符：链按首部长度走得通 → 重写尾部
+//  R5 首部长度损毁/链断裂：扫描自洽尾长度（值==块跨度 且 下一块类型已知/EOF）唯一 → 重写首部
+//  R6 长度非 4 字节对齐：同 R5 重同步；不唯一 → 只诊断
+// ============================================================
+const PCAPNG_SHB = 0x0a0d0d0a;
+const PCAPNG_BLOCK_NAMES = {
+  0x0a0d0d0a: "SHB(节头)", 0x00000001: "IDB(接口)", 0x00000003: "SPB(简单包)",
+  0x00000004: "NRB(名字)", 0x00000005: "ISB(统计)", 0x00000006: "EPB(增强包)",
+  0x00000007: "CFB(过滤)", 0x0000000a: "DSB(解密)",
+};
+const isKnownBlockType = (t) => Object.prototype.hasOwnProperty.call(PCAPNG_BLOCK_NAMES, t);
+
+/** pcapng 块链遍历：返回 {blocks, issues, endOff, trailing}。不修改输入。 */
+function walkPcapngBlocks(b, le, start) {
+  const blocks = [], issues = [];
+  let off = start;
+  while (off + 12 <= b.length) {
+    const type = u32(b, off, le);
+    const len1 = u32(b, off + 4, le);
+    if (len1 < 12 || len1 % 4 !== 0 || off + len1 > b.length) {
+      issues.push({ off, kind: "chain-break", type, len1 });
+      break;
+    }
+    const len2 = u32(b, off + len1 - 4, le);
+    if (len2 !== len1) issues.push({ off, kind: "trail-mismatch", len1, len2 });
+    if (!isKnownBlockType(type)) issues.push({ off, kind: "unknown-type", type });
+    blocks.push({ off, type, len: len1 });
+    off += len1;
+  }
+  return { blocks, issues, endOff: off, trailing: b.length - off };
+}
+
+/** 链评分：块数为主，类型全已知/无 issue 加权（用于字节序推断）。 */
+function scorePcapngWalk(w) {
+  let s = w.blocks.length * 10;
+  if (w.issues.length === 0 && w.trailing === 0) s += 5;
+  for (const blk of w.blocks) if (isKnownBlockType(blk.type)) s += 2;
+  return s;
+}
+
+/** 前插标准 SHB（28 字节，LE/BE 按参数）。 */
+function makeStandardShb(le) {
+  const h = new Uint8Array(28);
+  w32(h, 0, PCAPNG_SHB, le);
+  w32(h, 4, 28, le);
+  w32(h, 8, 0x1a2b3c4d, le); // BOM
+  w16(h, 12, 1, le);         // major
+  w16(h, 14, 0, le);         // minor
+  // 16..23 section_length = -1（未指定）→ 全 0xFF
+  for (let i = 16; i < 24; i++) h[i] = 0xff;
+  w32(h, 24, 28, le);
+  return h;
+}
+
+function isPcapngShbMagic(b) {
+  return b.length >= 12 && b[0] === 0x0a && b[1] === 0x0d && b[2] === 0x0d && b[3] === 0x0a;
+}
+function bomEndian(b) {
+  // BOM=0x1A2B3C4D：LE 存 4D 3C 2B 1A；BE 存 1A 2B 3C 4D
+  if (b[8] === 0x4d && b[9] === 0x3c && b[10] === 0x2b && b[11] === 0x1a) return true;  // LE
+  if (b[8] === 0x1a && b[9] === 0x2b && b[10] === 0x3c && b[11] === 0x4d) return false; // BE
+  return null;
+}
+/** 无 SHB 的 pcapng 疑似：首块类型已知（非 SHB）且某字节序下整链干净走完（无 issue/无残留）。
+ *  整链干净的证据强于经典 record 链的碰巧可解 ⇒ 命中即按 pcapng 处理（两种字节序都干净=歧义→不认）。 */
+function pcapngNoShbCandidate(b) {
+  let clean = 0;
+  for (const le of [true, false]) {
+    const t = u32(b, 0, le);
+    if (t === PCAPNG_SHB || !isKnownBlockType(t)) continue;
+    const w = walkPcapngBlocks(b, le, 0);
+    if (w.blocks.length >= 1 && w.issues.length === 0 && w.trailing === 0) clean++;
+  }
+  return clean === 1;
+}
+
+function pcapngRepairRun(b) {
+  const L = [];
+  L.push("=== pcapng 块级修复 ===");
+  L.push("");
+  const fixes = [];
+  let out = Uint8Array.from(b);
+  let le = null;
+
+  // ---- 入口判定 ----
+  const shbMagic = isPcapngShbMagic(out);
+  if (shbMagic) {
+    const bom = bomEndian(out);
+    if (bom !== null) {
+      le = bom;
+      L.push("● SHB magic + BOM 完好（" + (le ? "LE" : "BE") + "）");
+    } else {
+      L.push("⚠ SHB BOM 非法（偏移 8 非两种合法 BOM 之一）→ 按块链推断字节序");
+      const wLE = walkPcapngBlocks(out, true, 28);
+      const wBE = walkPcapngBlocks(out, false, 28);
+      const sLE = scorePcapngWalk(wLE), sBE = scorePcapngWalk(wBE);
+      if (sLE === sBE) {
+        L.push("  ✗ 两种字节序可解性相同（评分 " + sLE + " vs " + sBE + "）→ 无法确定，只诊断不补造。");
+        return { text: L.join("\n"), hex: null };
+      }
+      le = sLE > sBE;
+      w32(out, 8, 0x1a2b3c4d, le);
+      fixes.push("SHB BOM 重写为 " + (le ? "LE" : "BE") + "（块链评分 " + sLE + " vs " + sBE + "）");
+    }
+  } else {
+    // SHB magic 不符：区分「magic 损毁但 28B SHB 仍在」与「SHB 整体缺失」
+    const len28le = out.length >= 28 && u32(out, 4, true) === 28 && bomEndian(out) !== null;
+    const len28be = out.length >= 28 && u32(out, 4, false) === 28 && bomEndian(out) !== null;
+    if (len28le || len28be) {
+      le = bomEndian(out);
+      const bad = Array.from(out.subarray(0, 4)).map((x) => x.toString(16).padStart(2, "0")).join("");
+      for (let i = 0; i < 4; i++) out[i] = [0x0a, 0x0d, 0x0d, 0x0a][i];
+      fixes.push("SHB magic 损坏（原 " + bad + "）→ 重写 0A0D0D0A（BOM/长度字段完好为证）");
+      L.push("● 检出 28 字节 SHB（BOM 完好，" + (le ? "LE" : "BE") + "），magic 损坏");
+    } else if (pcapngNoShbCandidate(out)) {
+      const wLE = walkPcapngBlocks(out, true, 0);
+      const wBE = walkPcapngBlocks(out, false, 0);
+      const sLE = scorePcapngWalk(wLE), sBE = scorePcapngWalk(wBE);
+      le = sLE >= sBE ? true : false;
+      if (sLE === sBE) {
+        L.push("⚠ 无 SHB 且两种字节序可解性相同 → 按常见 LE 前插（字节序存疑，仅恢复可解析性）");
+      }
+      const shb = makeStandardShb(le);
+      const merged = new Uint8Array(shb.length + out.length);
+      merged.set(shb, 0);
+      merged.set(out, shb.length);
+      out = merged;
+      fixes.push("SHB 整体缺失 → 前插 28 字节标准 SHB（v1.0 / section_len 未指定；原头选项无从恢复）");
+      L.push("● 无 SHB：数据从已知块类型开始 → 前插标准 SHB（" + (le ? "LE" : "BE") + "）");
+    } else {
+      L.push("✗ 既非经典 pcap 也非可辨认 pcapng（首块类型未知）。");
+      L.push("  可能损坏过重或非抓包文件。");
+      return { text: L.join("\n"), hex: null };
+    }
+  }
+
+  // ---- 块级修复循环：trail-mismatch / chain-break 重同步 ----
+  for (let round = 0; round < 64; round++) {
+    const w = walkPcapngBlocks(out, le, 0);
+    const bad = w.issues.find((i) => i.kind === "chain-break" || i.kind === "trail-mismatch");
+    if (!bad) break;
+    const off = bad.off;
+   // 自洽候选：e 满足 值@e-4 == e-off 且 e=EOF 或 e 处是合法块开头（类型已知+长度合理）
+    const cands = [];
+    for (let e = off + 12; e <= out.length; e += 4) {
+      const t = u32(out, e - 4, le);
+      if (t !== e - off) continue;
+      if (e === out.length || (e + 12 <= out.length && isKnownBlockType(u32(out, e, le)) && u32(out, e + 4, le) >= 12 && u32(out, e + 4, le) % 4 === 0)) {
+        cands.push(e - off);
+      }
+    }
+   // 首部落点是否为合法块界（链证据）
+    const len1 = u32(out, off + 4, le);
+    const leadingConsistent = off + len1 <= out.length && (off + len1 === out.length ||
+      (off + len1 + 12 <= out.length && isKnownBlockType(u32(out, off + len1, le)) && u32(out, off + len1 + 4, le) >= 12 && u32(out, off + len1 + 4, le) % 4 === 0));
+    if (cands.length === 1 && cands[0] !== len1) {
+     // R5/R6：尾部长度完好自洽且唯一 → 首部是撒谎者（含非对齐/越界）
+      w32(out, off + 4, cands[0], le);
+      fixes.push("块 @" + off + " 首部长度 " + len1 + " 损毁（自洽尾长度唯一）→ 重写为 " + cands[0]);
+    } else if (bad.kind === "trail-mismatch" && leadingConsistent && cands.length === 0) {
+     // R4：首部落点合法且无自洽替代 → 尾部是撒谎者
+      w32(out, off + len1 - 4, len1, le);
+      fixes.push("块 @" + off + " 尾部长度 " + bad.len2 + " 与首部 " + len1 + " 不符 → 重写为 " + len1);
+    } else {
+      L.push("⚠ 块 @" + off + " 长度证据冲突（现值 " + len1 + "，自洽候选 " + JSON.stringify(cands) + "，首部落点" + (leadingConsistent ? "合法" : "非法") + "）→ 无法唯一确定，只诊断。");
+      break;
+    }
+  }
+
+  // ---- 终检 + 统计 ----
+  const w = walkPcapngBlocks(out, le, 0);
+  const cnt = {};
+  let ifaces = 0, packets = 0, epbUnknownIfaces = 0;
+  const ifaceSet = new Set();
+  for (const blk of w.blocks) {
+    const name = PCAPNG_BLOCK_NAMES[blk.type] || ("未知(0x" + blk.type.toString(16) + ")");
+    cnt[name] = (cnt[name] || 0) + 1;
+    if (blk.type === 0x00000001) { ifaces++; ifaceSet.add(blk.off); }
+    if (blk.type === 0x00000006) {
+      packets++;
+      if (blk.len >= 28) {
+        const ifid = u32(out, blk.off + 8, le);
+        if (ifid >= ifaces) epbUnknownIfaces++;
+      }
+    }
+    if (blk.type === 0x00000003) packets++;
+  }
+  L.push("");
+  L.push("● 字节序: " + (le ? "LE" : "BE") + "，块数 " + w.blocks.length + "（接口 " + ifaces + " / 包块 " + packets + "）");
+  for (const [k, v] of Object.entries(cnt)) L.push("  " + k + " × " + v);
+  if (epbUnknownIfaces) L.push("⚠ " + epbUnknownIfaces + " 个 EPB 引用不存在的接口号（多节/损坏，仅提示）");
+  if (w.trailing > 0) L.push("⚠ 末尾残留 " + w.trailing + " 字节非完整块（截断残留；保守不动，解析器会忽略）");
+  if (w.issues.length === 0 && w.trailing === 0) L.push("✓ 块链完整自洽");
+  L.push("");
+  if (fixes.length) {
+    L.push("--- 已修复 " + fixes.length + " 处 ---");
+    fixes.forEach((f, i) => L.push("  " + (i + 1) + ". " + f));
+  } else {
+    L.push("✓ 无需修复。");
+  }
+  return { text: L.join("\n"), hex: toHex(out), repaired: out, ok: w.issues.length === 0 };
+}
+
 // 判断从 off 起的 16 字节 record 头在给定字节序下是否"合理"
 // 合理 = incl_len 在 (0, 剩余字节] 且 incl_len <= orig_len 且 orig_len < 262144(256KB)
 function recordPlausible(b, off, le) {
@@ -150,6 +362,23 @@ function pcapRepairRun(text, p) {
 
   if (b.length < REC_HDR_LEN) {
     L.push("✗ 数据太短（" + b.length + " 字节），不足以判断 pcap 结构。");
+    return L.join("\n");
+  }
+
+ // ---- pcapng 分派 ----
+ // 优先级：①SHB magic 完好（0A0D0D0A 回文，两字节序同形）→ pcapng
+ //        ②SHB magic 损毁但证据在（块长=28 且 BOM 合法）→ pcapng
+ //        ③无 SHB 但已知块整链干净走完 → pcapng（证据强于经典链碰巧可解）
+  const damagedShb = !isPcapngShbMagic(b) && b.length >= 28 && (u32(b, 4, true) === 28 || u32(b, 4, false) === 28) && bomEndian(b) !== null;
+  if (isPcapngShbMagic(b) || damagedShb || pcapngNoShbCandidate(b)) {
+    const r = pcapngRepairRun(b);
+    L.length = 0;
+    L.push(r.text);
+    if (r.hex !== null) {
+      L.push("");
+      L.push("--- 修复后 pcapng（hex，可复制喂给 pcapParse/pcapng 解析器）---");
+      L.push(r.hex.length > 200000 ? r.hex.slice(0, 200000) + "\n…(hex 过长已截断，实际 " + (r.hex.length / 2) + " 字节)" : r.hex);
+    }
     return L.join("\n");
   }
 
@@ -304,7 +533,7 @@ register({
   id: "pcapRepair",
   cat: "analysis",
   name: "pcap 文件修复",
-  desc: "诊断+修复损坏 pcap：非法/缺失 magic 按 record 链反推重写、全局头整体缺失时前插标准头、字节序标记与内容不符时翻转、snaplen/version 异常修正、incl_len 越界截断。输出修复后 hex 可喂 pcapParse",
+  desc: "诊断+修复损坏 pcap/pcapng：经典 pcap（非法/缺失 magic 按 record 链反推重写、全局头缺失前插标准头、字节序翻转、snaplen/version 修正、incl_len 越界截断）；pcapng 块级保守修复（SHB magic/BOM 重写、SHB 缺失前插、块长首尾失配重写、链断裂自洽重同步，歧义只诊断不补造）。输出修复后 hex",
   params: [
     {
       key: "inputEnc", label: "输入编码", type: "select", default: "auto",
@@ -319,4 +548,4 @@ register({
   acceptsBytes: true,
 });
 
-export { pcapRepairRun, parseInput, walkRecords, recordPlausible, MAGICS };
+export { pcapRepairRun, parseInput, walkRecords, recordPlausible, MAGICS, pcapngRepairRun, walkPcapngBlocks, makeStandardShb };

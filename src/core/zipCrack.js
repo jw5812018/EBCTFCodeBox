@@ -533,9 +533,9 @@ function inputToZipBytes(text) {
 // ============================================================
 register({
   id: "zipBrute", family: "zip", familyLabel: "crack",
-  cat: "forensic",
-  name: "ZIP 弱口令爆破",
-  desc: "ZIP 加密条目弱口令爆破：ZipCrypto（传统 PKWARE）走 12 字节头快筛+CRC 全量校验；WinZip AES（AE-1/AE-2，method 99）走 WebCrypto PBKDF2-HMAC-SHA1 派生 + pwdVer 快筛 + HMAC-SHA1 认证码确认。内置字典 + 自定义字典 + 纯数字掩码。仅验证密码，不还原明文。数字位数默认 4，硬上限 6（AES 条目数字掩码逐口令 PBKDF2 极慢，建议用字典）。输入 ZIP 的 hex/base64/拖入字节",
+  cat: "crack",
+  name: "ZIP 弱口令爆破（小字典快验）",
+  desc: "ZIP 弱口令快速验证：ZipCrypto（传统 PKWARE）走 12 字节头快筛+CRC 全量校验；WinZip AES（AE-1/AE-2，method 99）走 PBKDF2-HMAC-SHA1 派生 + pwdVer 快筛 + HMAC-SHA1 确认。内置字典 + 自定义字典 + 纯数字掩码（默认 4 位，硬上限 6 位），仅验证密码不还原明文。本工具不做大规模爆破——更强算力请用本箱「ZIP 哈希提取（zip2john）」取出 hash 串，喂 John the Ripper（https://www.openwall.com/john）或 hashcat（-m 13600 / -m 17200-17230，https://hashcat.net）。输入 ZIP 的 hex/base64/拖入字节",
   params: [
     { key: "maxDigits", label: "数字掩码位数上限（默认 4，硬上限 6）", type: "number", default: 4 },
     { key: "dict", label: "自定义字典（每行一个密码，可空）", type: "text", default: "", placeholder: "flag\nctf2024\n..." },

@@ -28,11 +28,21 @@ import { pngChunkCrcReport } from "./pngChunks.js";
 import { extractExif, extractXmp } from "./imgMeta.js";
 import { MAGIC_TABLE, identifyMagic } from "./trailerCarve.js";
 import { inflateRaw, analyzePcapBytes } from "./pcapDeep.js";
+import { analyzeTrafficBytes } from "./trafficReadable.js"; // 拖入 pcap/pcapng 时追加「人类可读结论」
 // 复用（单向 import，绝不改这些模块）：
 // invisibles.js — scan/strip/countByType（不可见字符结构化 API）
 // stegoText.js — zwScan（零宽扫描完整报告，供 view 详情）
 import { scan as invScan, strip as invStrip, countByType as invCountByType } from "./invisibles.js";
 import { zwScan } from "./stegoText.js";
+import { decodeUtf8Lossless } from "./bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ============================================================
 // 工具：字节读取
@@ -952,7 +962,7 @@ function sniffDecodeText(bytes, max = 4 * 1024 * 1024) {
   const latin1 = () => { let s = ""; for (let i = 0; i < n; i++) s += String.fromCharCode(sub[i]); return { text: s, enc: "latin1" }; };
   // ① UTF-8 严格解码成功 = 合法 UTF-8（含纯 ASCII）
   try {
-    const t = new TextDecoder("utf-8", { fatal: true }).decode(sub);
+    const t = _decodeUtf8Fatal(sub);
     return { text: t, enc: "utf-8" };
   } catch { /* 非合法 UTF-8，进入嗅探 */ }
   // ② 二进制流闸门：控制字节多 = 压缩/加密/媒体，绝不当 CJK 文本解（防 gb18030 假中文）
@@ -1136,6 +1146,10 @@ export function analyzeFile(bytes, name = "") {
   if (detected && (detected.ext === "pcap" || detected.ext === "pcapng")) {
     const pcapSections = analyzePcapBytes(u8a);
     for (const s of pcapSections) sections.push(s);
+    // 追加人类可读结论：USB 键鼠还原 / HTTP·DNS·TLS 摘要 / MQTT 主题表 / flag 与明文
+    // （纯 JS、零依赖、无 DOM；失败只产生一条 warn 小节，不影响既有分析）
+    const trafficSections = analyzeTrafficBytes(u8a);
+    for (const s of trafficSections) sections.push(s);
   }
 
  // 3. 文件尾附加数据（附带 actions：文本 + 二进制双份存盘）

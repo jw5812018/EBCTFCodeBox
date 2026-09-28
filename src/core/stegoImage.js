@@ -18,6 +18,7 @@
 // UI 层在 app.js 里特殊处理（文件上传 → dataURL → canvas → imageData → 调 op → 输出 dataURL）。
 import { register } from "./registry.js";
 import { dataURLToBytes, decodePNG, rgbaToDataURL } from "./stegoPixels.js";
+import { inflateRaw } from "./pcapDeep.js";
 
 // ============ lsbImage：通用 LSB 像素隐写 ============
 // 每 channel 最低位藏 1 bit，前 32 bit 存消息字节长度（big-endian）
@@ -57,39 +58,10 @@ function lsbImageEncode(imageData, text, p = {}) {
   return imageData;
 }
 
+// 历史遗留入口：C7-P12 起 lsbMultiDecode(bitDepth=1) 与本函数逐位等价（当时已核实），
+// 故直接委托，避免两份实现分叉 —— raw 流兜底、明确报错等修复只需维护一处。
 function lsbImageDecode(imageData, p = {}) {
-  const channels = p.channels || "RGB";
-  const chanMask = _lsbChannelMask(channels);
-  const data = imageData.data;
- // 读 32 位长度
-  let len = 0;
-  let bitIdx = 0;
-  for (let px = 0; px < data.length && bitIdx < 32; px += 4) {
-    for (const c of chanMask) {
-      if (bitIdx >= 32) break;
-      len = (len << 1) | (data[px + c] & 1);
-      bitIdx++;
-    }
-  }
-  len >>>= 0; // 32 位无符号化：最高位为 1 时避免负长度绕过下面的上限检查
-  if (len === 0 || len > Math.floor(data.length / 4) * chanMask.length / 8) {
-    return ""; // 无消息或损坏
-  }
- // 读消息字节
-  const bytes = new Uint8Array(len);
-  for (let i = 0; i < len; i++) {
-    let b = 0;
-    for (let j = 0; j < 8; j++) {
- // 找下一个 bit 位置
-      const globalBit = 32 + i * 8 + j;
- // 重新计算 px/c（避免 bitIdx 漂移）
-      const pxIdx = Math.floor(globalBit / chanMask.length) * 4;
-      const cIdx = chanMask[globalBit % chanMask.length];
-      b = (b << 1) | (data[pxIdx + cIdx] & 1);
-    }
-    bytes[i] = b;
-  }
-  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return lsbMultiDecode(imageData, { ...p, bitDepth: 1 });
 }
 
 function _lsbChannelMask(channels) {
@@ -179,9 +151,15 @@ function pjEncodeMessage(colors, hash, message) {
 
 function pjDecodeMessage(colors, hash) {
   const history = [];
+  const capacityChars = Math.floor(colors.length * 0.75 / 16);
   const messageSize = pjGetNumberFromBits(colors, history, hash);
-  if ((messageSize + 1) * 16 > colors.length * 0.75) return "";
-  if (messageSize === 0 || messageSize > PJ_MAX_MESSAGE_SIZE) return "";
+ // 长度头不合理 → 大概率图内无载荷；但口令错误时定位序列错位同样会读出乱值，两种可能都要提示，不再静默返回空串。
+  if (messageSize === 0) {
+    throw new Error("未检出 PixelJihad 载荷：长度头实测为 0——图内没有隐藏数据；若原图带口令，口令不符也会读出乱值，请先确认口令为空或正确");
+  }
+  if (messageSize > PJ_MAX_MESSAGE_SIZE || (messageSize + 1) * 16 > colors.length * 0.75) {
+    throw new Error("未检出 PixelJihad 载荷：长度头实测 " + messageSize + "，超出本图容量上限 " + capacityChars + " 字符——图内没有隐藏数据；若原图带口令，口令不符也会读出乱值，请先确认口令");
+  }
   const message = [];
   for (let i = 0; i < messageSize; i++) {
     const code = pjGetNumberFromBits(colors, history, hash);
@@ -228,17 +206,28 @@ function pixelJihadDecode(imageData, p = {}) {
   try {
     message = pjDecodeMessage(imageData.data, hash);
   } catch (e) {
- // 图太小/可用位置耗尽 → pjGetNextLocation 抛错，视作无隐藏消息
-    return "";
+ // 长度头不可信 / 可用位置耗尽（小图读大长度头）——按裁决①带实测数字明确抛错，不再静默吞成空串
+    throw new Error("PixelJihad 解码失败：" + (e && e.message ? e.message : e));
   }
-  if (!message) return "";
   let obj = null;
-  try { obj = JSON.parse(message); } catch (e) { return ""; }
-  if (!obj) return "";
-  if (obj.ct) {
-    try { return sjcl.decrypt(password, message); } catch (e) { return ""; }
+  try { obj = JSON.parse(message); } catch (e) { obj = null; }
+  if (!obj || typeof obj !== "object") {
+ // 长度头可信但内容解不出 JSON 结构：口令不符（解出乱文）或图非本工具编码生成
+    throw new Error("PixelJihad 解码失败：按长度头读出 " + message.length + " 字符但不是有效载荷结构——口令错误的可能性最大"
+      + (password ? "（请核对当前口令）" : "（原图若带口令请填入口令重试）") + "，其次该图可能不是 PixelJihad 编码生成");
   }
-  return obj.text || "";
+  if (obj.ct) {
+    try {
+      return sjcl.decrypt(password, message);
+    } catch (e) {
+ // AES-CCM 自带认证：结构完整但认证未通过 ⇒ 可明确定性为口令错误（或密文被改动）
+      throw new Error("PixelJihad 口令错误：载荷为 AES-CCM 密文（" + (obj.ct ? obj.ct.length : 0) + " 字符），认证未通过——口令不符，或密文被改动");
+    }
+  }
+  if (typeof obj.text !== "string") {
+    throw new Error("PixelJihad 解码失败：载荷 JSON 缺少 text 字段，结构异常（非本工具生成的载荷）");
+  }
+  return obj.text;
 }
 
 // ============ arnoldCat：Arnold 猫脸变换置乱 ============
@@ -525,8 +514,8 @@ async function imageDiffOp(text, p = {}) {
 // 已逐位核实）。改用 lsbMulti 的 encode/decode（depth 1 走同一 0xFE LSB 路径），加 bitDepth
 // 参数（默认 1 = 原 lsbImage 行为）+ A 通道选项。lsbImageEncode/Decode 函数保留供测试/复用。
 register({
-  id: "lsbImage", cat: "stego", name: "LSB 像素隐写",
-  desc: "最低有效位像素隐写（前 32 位存长度，支持 R/G/B/A 通道选择，多位深 1-3 位/通道）",
+  id: "lsbImage", cat: "stegoFile", name: "LSB 像素隐写",
+  desc: "最低有效位像素隐写（前 32 位存长度，支持 R/G/B/A 通道选择，多位深 1-3 位/通道）。提取时若图中不是本格式（位流无长度前缀），自动改按原始位流提取最长可读文本；两者都没有才报错并给出原因。",
   params: [
     { key: "channels", label: "通道", type: "select", default: "RGB",
       options: [
@@ -552,7 +541,7 @@ register({
 });
 
 register({
-  id: "pixelJihad", cat: "stego", name: "PixelJihad",
+  id: "pixelJihad", cat: "stegoFile", name: "PixelJihad",
   desc: "PixelJihad 隐写（SHA-256 种子 + 伪随机 LSB + 可选 AES-CCM 加密）",
   params: [
     { key: "password", label: "密码", type: "text", default: "", placeholder: "可选密码（空则不加密）" },
@@ -563,7 +552,7 @@ register({
 });
 
 register({
-  id: "arnoldCat", family: "arnold", familyLabel: "transform", cat: "stego", name: "Arnold 猫脸变换",
+  id: "arnoldCat", family: "arnold", familyLabel: "transform", cat: "stegoFile", name: "Arnold 猫脸变换",
   desc: "Arnold 猫脸变换置乱（正方形图像，参数化矩阵 [[1,a],[b,ab+1]]，a=b=1 为标准版）",
   params: [
     { key: "iterations", label: "迭代次数", type: "number", default: 1, placeholder: "1-100" },
@@ -733,7 +722,7 @@ async function arnoldCatBruteOp(text, p = {}) {
 }
 
 register({
-  id: "arnoldCatBrute", family: "arnold", familyLabel: "crack", cat: "stego", name: "Arnold 猫脸暴破",
+  id: "arnoldCatBrute", family: "arnold", familyLabel: "crack", cat: "stegoFile", name: "Arnold 猫脸暴破",
   desc: "全参数暴力破解：a/b/迭代次数三维范围遍历反向还原，候选缩略图网格拼图输出（随参数范围增大耗时线性增长）",
   params: [
     { key: "aStart", label: "a 起始", type: "number", default: 1 },
@@ -748,7 +737,7 @@ register({
 });
 
 register({
-  id: "imageBasic", cat: "stego", name: "图像基础操作",
+  id: "imageBasic", cat: "image", name: "图像基础操作",
   desc: "反色/翻转/通道分离/位平面提取等图像基础变换",
   params: [
     { key: "op", label: "操作", type: "select", default: "invert",
@@ -885,6 +874,52 @@ function lsbMultiEncode(imageData, text, p = {}) {
   return imageData;
 }
 
+// ---- 原始 LSB 流兜底（无 32 位长度前缀）----
+// 为什么需要：本 op 的编码格式是「前 32 位存长度」。若图里的 LSB 流**不是**本 op 写的
+// （CTF 常见：直接把文本按位铺进 LSB，不带任何头），头 32 位就会被读成一个天文数字
+// ——例：流首恰好是文本 "PWLS" ⇒ len = 0x50574C53 = 13.47 亿，远超图像容量，
+// 旧实现于是**静默返回空串**：用户看到「不出结果」，而数据一直都在图里。
+// 兜底：把全部槽位按位拼字节，遇 NUL 截断，按 UTF-8 解码；**仅当像文本时才返回**，
+// 避免把普通照片的 LSB 噪声当成结果吐出来。
+const LSB_RAW_CAP_BYTES = 65536;
+
+/**
+ * 文本可读性判据（原始位流兜底的闸门）。
+ * 为什么不能只看「可打印率」：随机噪声的 LSB 里出现一段可打印 ASCII 游程并不罕见
+ * （每字节 ~37%），只按比例判会把普通照片的噪声当成结果吐出来。
+ * 故要求长度 ≥ 12（噪声出现 12 连续干净字节的概率 ~1e-5，可忽略），
+ * 且**不含任何解码失败符/控制字符**（干净载荷不会有；噪声里非法 UTF-8 极常见）。
+ */
+function _lsbTextLooksReadable(text) {
+  if (!text || text.length < 12) return false;
+  for (let i = 0; i < text.length; i++) if (_lsbCharBad(text.charCodeAt(i))) return false;
+  return true;
+}
+function _lsbCharBad(c) {
+  return c === 0xFFFD || c === 0x7F || (c < 0x20 && c !== 9 && c !== 10 && c !== 13);
+}
+
+/** 原始位流 → 文本（无长度前缀假设）。readBit(g) 给第 g 个槽位的位值。 */
+function lsbRawPayload(readBit, totalSlots) {
+  const nBytes = Math.min(Math.floor(totalSlots / 8), LSB_RAW_CAP_BYTES);
+  if (nBytes <= 0) return "";
+  const bytes = new Uint8Array(nBytes);
+  for (let i = 0; i < nBytes; i++) {
+    let b = 0;
+    for (let j = 0; j < 8; j++) b = (b << 1) | readBit(i * 8 + j);
+    bytes[i] = b;
+  }
+  const full = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  // 取**最长干净前缀**作为载荷：载荷之后是填充（NUL / 0xFF / 载体图自身的 LSB），
+  // 其解码结果几乎立刻出现「解码失败符」或控制字符。这样不必假定终止符、也不必猜
+  // 填充字节是什么；比「遇 NUL 截断」或「连续 3 个坏字符截断」都稳（实测后者会被
+  // 0x55/0xAA 交替的填充骗过去）。
+  let end = 0;
+  while (end < full.length && !_lsbCharBad(full.charCodeAt(end))) end++;
+  const text = full.slice(0, end);
+  return _lsbTextLooksReadable(text) ? text : "";
+}
+
 function lsbMultiDecode(imageData, p = {}) {
   const channels = p.channels || "RGB";
   const chanMask = _lsbChannelMask(channels);
@@ -900,8 +935,23 @@ function lsbMultiDecode(imageData, p = {}) {
   let len = 0;
   for (let i = 0; i < 32; i++) len = (len << 1) | readBit(i);
   len >>>= 0; // 32 位无符号化：最高位为 1 时避免负长度绕过下面的上限检查
-  const maxLen = Math.floor(Math.floor(data.length / 4) * chanMask.length * bitDepth / 8);
-  if (len === 0 || len > maxLen) return "";
+  const totalSlots = Math.floor(data.length / 4) * chanMask.length * bitDepth;
+  const maxLen = Math.floor(totalSlots / 8);
+  if (len === 0 || len > maxLen) {
+    // 不是本 op 的「32 位长度前缀」格式 ⇒ 按原始位流再试一次。
+    const raw = lsbRawPayload(readBit, totalSlots);
+    if (raw) return raw;
+    // 头 32 位全零 = 图里确实没有 LSB 载荷，静默返回空（与既有语义一致）。
+    if (len === 0) return "";
+    // 头 32 位是个越界的大数 = 明确「不是本格式」，且原始位流也没读出文本 ⇒
+    // 不再静默吞掉，给出可执行的结论（含实测数字与下一步）。
+    throw new Error(
+      "未找到 LSB 数据：头 32 位读作长度 = " + len + "，超过本图容量上限 " + maxLen +
+      " 字节；按原始位流提取（不假定长度前缀）也没有得到可读文本。" +
+      "该图可能本来就没有 LSB 隐写载荷，或不是本工具「前 32 位存长度」的格式。" +
+      "若确认图中藏有 LSB 文本，请用「拖入图片」的 LSB 通道预览（含 12 种通道排列，可换 R/G/B 顺序）。"
+    );
+  }
   const bytes = new Uint8Array(len);
   for (let i = 0; i < len; i++) {
     let b = 0;
@@ -934,6 +984,14 @@ function _pngParseChunks(bytes) {
 }
 
 // ============ pngText：PNG 文本块读写 ============
+// zlib 流解压（RFC 1950）：仓库内纯 JS inflate（pcapDeep.js），替代可选 globalThis.pako
+function _inflateZlibLocal(zb) {
+  if (!zb || zb.length < 6) throw new Error("zlib 数据过短");
+  const cmf = zb[0], flg = zb[1];
+  if ((cmf & 0x0f) !== 8 || (((cmf << 8) | flg) % 31) !== 0) throw new Error("zlib 头非法");
+  return inflateRaw(zb.subarray(2, zb.length - 4));
+}
+
 function pngTextDecode(text, p = {}) {
   const bytes = (p && p.rawBytes && p.rawBytes.length)
     ? (p.rawBytes instanceof Uint8Array ? p.rawBytes : new Uint8Array(p.rawBytes))
@@ -955,11 +1013,9 @@ function pngTextDecode(text, p = {}) {
       const method = nul >= 0 ? data[nul + 1] : 0;
       const comp = nul >= 0 ? data.subarray(nul + 2) : new Uint8Array(0);
       let val = null;
-      if (typeof globalThis !== "undefined" && globalThis.pako && globalThis.pako.inflate) {
-        try { val = _utf8(globalThis.pako.inflate(comp)); } catch (e) { val = null; }
-      }
+      try { val = _utf8(_inflateZlibLocal(comp)); } catch (e) { val = null; }
       if (val === null) {
-        lines.push(`[zTXt] ${kw}: (zlib 压缩，方法 ${method}，${comp.length} 字节；需 pako/zlib 解压，hex 前32: ${_hex(comp, 32)})`);
+        lines.push(`[zTXt] ${kw}: (zlib 压缩，方法 ${method}，${comp.length} 字节，解压失败；hex 前32: ${_hex(comp, 32)})`);
       } else {
         lines.push(`[zTXt] ${kw}: ${val}`);
       }
@@ -979,10 +1035,8 @@ function pngTextDecode(text, p = {}) {
         if (compFlag === 0) val = _utf8(raw);
         else {
           let dec = null;
-          if (typeof globalThis !== "undefined" && globalThis.pako && globalThis.pako.inflate) {
-            try { dec = _utf8(globalThis.pako.inflate(raw)); } catch (e) {}
-          }
-          val = dec !== null ? dec : `(zlib 压缩，${raw.length} 字节；需 pako)`;
+          try { dec = _utf8(_inflateZlibLocal(raw)); } catch (e) { dec = null; }
+          val = dec !== null ? dec : `(zlib 压缩，${raw.length} 字节，解压失败)`;
         }
       }
       lines.push(`[iTXt] ${kw}: ${val}`);
@@ -1188,7 +1242,7 @@ function imageDiffTransform(imageData, p = {}) {
 // lsbMultiEncode/Decode 函数保留（lsbImage 现用它们做统一实现），此处注册删除。
 
 register({
-  id: "pngText", family: "png", familyLabel: "text", cat: "stego", name: "PNG 文本块读写",
+  id: "pngText", family: "png", familyLabel: "text", cat: "image", name: "PNG 文本块读写",
   desc: "PNG tEXt/zTXt/iTXt chunk 解析与写入（操作文件字节，base64 输入输出，不经 canvas）",
   params: [
     { key: "keyword", label: "关键字", type: "text", default: "Comment", placeholder: "tEXt 关键字（1-79 字节）" },
@@ -1199,7 +1253,7 @@ register({
 });
 
 register({
-  id: "pngHeight", family: "png", familyLabel: "height", cat: "stego", name: "PNG 高度修改",
+  id: "pngHeight", family: "png", familyLabel: "height", cat: "image", name: "PNG 高度修改",
   desc: "修改 PNG IHDR 高度（CTF 隐藏图层经典手法；操作文件字节，base64 输入输出）",
   params: [
     { key: "height", label: "新高度", type: "number", default: 0, placeholder: "0=自动 1.5 倍，或指定像素值" },
@@ -1209,7 +1263,7 @@ register({
 });
 
 register({
-  id: "exifExtract", cat: "stego", name: "EXIF 提取",
+  id: "exifExtract", cat: "image", name: "EXIF 提取",
   desc: "解析 JPEG APP1 EXIF 元数据（Make/Model/DateTime/GPS 等；操作文件字节，base64 输入）",
   params: [],
   run: exifExtractRun,
@@ -1217,7 +1271,7 @@ register({
 });
 
 register({
-  id: "bitplaneSlicing", cat: "stego", name: "位平面分解",
+  id: "bitplaneSlicing", cat: "image", name: "位平面分解",
   desc: "提取指定比特位的位平面（color 按 RGB 各通道，gray 按亮度）",
   params: [
     { key: "bit", label: "位序号", type: "number", default: 0, placeholder: "0-7（0=LSB）" },
@@ -1233,7 +1287,7 @@ register({
 });
 
 register({
-  id: "imageDiff", cat: "stego", name: "图像差异对比",
+  id: "imageDiff", cat: "image", name: "图像差异对比",
   desc: "双图逐像素运算（XOR/差值/加/与/或），找隐藏层；第二张图从参数栏粘贴 base64/dataURL",
   params: [
     { key: "mode", label: "运算", type: "select", default: "xor",

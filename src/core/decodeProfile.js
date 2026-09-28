@@ -103,10 +103,17 @@ const CUSTOM_BUDGET = STRENGTH_PRESETS.enhanced.magic;
  * 文件作用域优先分类：拖入文件时这些分类的 op 才是主力。
  * 文本作用域反之——排除纯文件向分类，避免对一段密文跑 pcap 修复这类无意义项。
  */
-const FILE_FIRST_CATS = new Set(["forensic", "stego", "data", "analysis"]);
+// 「倾向文件输入」的分类：智能解码走文件优先路径时的判据之一。
+// ⚠ 分类拆分后必须同步：原 forensic/stego 各自裂成 archive+crack+forensic+filefmt
+//   与 image+audio+stego，漏改会让这些类的 op 在智能解码里丢掉"文件优先"待遇。
+const FILE_FIRST_CATS = new Set([
+  "archive", "crack", "forensic", "filefmt",
+  "image", "audio", "stego",
+  "data", "analysis",
+]);
 
 // ============================================================
-// 暴力爆破池（与解码池完全分离，恒烈 2026-08-03 需求）
+// 暴力爆破池（与解码池完全分离，产品负责人 2026-08-03 需求）
 // ============================================================
 
 /**

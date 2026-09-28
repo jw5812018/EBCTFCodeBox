@@ -1,3 +1,4 @@
+import { candidateSignals } from "./magic/smartCandidates.js";
 /*
  * core/cryptoTryAll.js — 密码学「密钥+密文一键尝试」（T34 交付）
  *
@@ -69,21 +70,14 @@ function bytesToUtf8(bytes) {
 // ---------- 打分 ----------
 /**
  * 给候选明文打分（0-1，越高越像明文）。
- * - crib 命中 → 1.0
+ * - crib/目标命中 → 共享信号有限加权
  * - U+FFFD 占比 > 10% → 0（无效 UTF-8 多，不是文本明文）
  * - 否则：printableRatio - entropy/16（可打印率高 + 熵低 → 高分），clamp 0-1
  */
 function scoreCandidate(plainBytes, crib) {
   const text = bytesToUtf8(plainBytes);
-  if (crib) {
-    let hit = false;
-    try {
-      hit = new RegExp(crib).test(text);
-    } catch {
-      hit = text.includes(crib);
-    }
-    if (hit) return { confidence: 1.0, matchesCrib: true, text };
-  }
+  const signal = candidateSignals(text, crib);
+  const matchesCrib = signal.signals.some(s => s.label === "crib 命中");
  // U+FFFD 占比检查（无效 UTF-8 字节多 → 大量替换字符 → 不是文本明文）
   let replacementCount = 0;
   for (const ch of text) {
@@ -91,14 +85,16 @@ function scoreCandidate(plainBytes, crib) {
   }
   const replacementRatio = text.length > 0 ? replacementCount / text.length : 0;
   if (replacementRatio > 0.1) {
-    return { confidence: 0, matchesCrib: false, text };
+    return { confidence: 0, baseConfidence: 0, matchesCrib: false, text, signals: signal.signals, signalAdjust: 0 };
   }
   const printableRatio = isPrintableRatio(text);
   const ent = entropy(plainBytes);
   let confidence = printableRatio - ent / 16;
   if (confidence < 0) confidence = 0;
   if (confidence > 1) confidence = 1;
-  return { confidence, matchesCrib: false, text };
+  const baseConfidence = confidence;
+  confidence = Math.min(0.99, Math.max(0, confidence - signal.adjust / 200));
+  return { confidence, baseConfidence, matchesCrib, text, signals: signal.signals, signalAdjust: signal.adjust };
 }
 
 // ---------- 单次尝试 ----------
@@ -106,7 +102,7 @@ function tryOne(decryptFn, meta, crib, minConfidence) {
   try {
     const plainBytes = decryptFn();
     if (!plainBytes || plainBytes.length === 0) return null;
-    const { confidence, matchesCrib, text } = scoreCandidate(plainBytes, crib);
+    const { confidence, matchesCrib, text, signals, signalAdjust, baseConfidence } = scoreCandidate(plainBytes, crib);
     if (!matchesCrib && confidence < minConfidence) return null;
     return {
       algo: meta.algo,
@@ -117,7 +113,7 @@ function tryOne(decryptFn, meta, crib, minConfidence) {
       ivEnc: meta.ivEnc || null,
       plaintext: text,
       confidence,
-      matchesCrib,
+      matchesCrib, signals, signalAdjust, baseConfidence,
     };
   } catch {
     return null; // 解密失败（PKCS7 校验、密钥长度、密文长度等）属正常
@@ -131,7 +127,7 @@ function tryOne(decryptFn, meta, crib, minConfidence) {
  * - cipherText: string 密文（必填）
  * - keyText: string 密钥（必填）
  * - ivText: string? IV（可选，块密码非 ECB 用；省略则尝试全0 IV）
- * - crib: string? 目标特征（正则或子串，命中直接 confidence=1.0）
+ * - crib: string? 目标特征（仅字面匹配，有限加权）
  * @param {object} opts?
  * - maxAttempts: number 默认 2000（组合爆炸上限）
  * - timeBudgetMs: number 默认 3000（时间预算）
@@ -145,7 +141,7 @@ export async function cryptoTryAll(input, opts = {}) {
   const cipherText = (input && input.cipherText) || "";
   const keyText = (input && input.keyText) || "";
   const ivText = (input && input.ivText) || "";
-  const crib = (input && input.crib) || "";
+  const crib = { crib: typeof input?.crib === "string" ? input.crib : "", targets: opts.targets || input?.targets || [] };
   if (!cipherText || !keyText) return [];
 
   const maxAttempts = opts.maxAttempts || 2000;
@@ -172,12 +168,12 @@ export async function cryptoTryAll(input, opts = {}) {
     try {
       const plainBytes = await fernetDecrypt(cipherText, keyText);
       if (plainBytes && plainBytes.length > 0) {
-        const { confidence, matchesCrib, text } = scoreCandidate(plainBytes, crib);
+        const { confidence, matchesCrib, text, signals, signalAdjust, baseConfidence } = scoreCandidate(plainBytes, crib);
         if (matchesCrib || confidence >= minConfidence) {
           results.push({
             algo: "Fernet", mode: null, pad: null,
             keyEnc: "base64url", cipherEnc: "base64url", ivEnc: null,
-            plaintext: text, confidence, matchesCrib,
+            plaintext: text, confidence, matchesCrib, signals, signalAdjust, baseConfidence,
           });
         }
       }
@@ -295,8 +291,8 @@ function finalize(results) {
   dedup.sort((a, b) => {
     const ab = a.matchesCrib ? 1 : 0;
     const bb = b.matchesCrib ? 1 : 0;
-    if (bb !== ab) return bb - ab;
-    return b.confidence - a.confidence;
+    // Shared signal adjustment is already included in confidence.
+    return ((1 - a.baseConfidence) * 200 + a.signalAdjust) - ((1 - b.baseConfidence) * 200 + b.signalAdjust);
   });
   return dedup;
 }

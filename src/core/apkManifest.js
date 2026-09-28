@@ -1,5 +1,5 @@
 /*
- * apkManifest.js — APK AndroidManifest.xml 解析（P1 批，cat:'forensic'，单向 run）。
+ * apkManifest.js — APK AndroidManifest.xml 解析（P1 批，cat:'filefmt'，单向 run）。
  *
  * 解决什么：APK（ZIP 容器）里的 AndroidManifest.xml 多数是二进制 AXML 格式，
  * 纯文本正则挖不了；本工具直接把 manifest 解出来：包名 package、权限
@@ -402,7 +402,7 @@ export function makeApk(manifest) {
 // ============ register ============
 
 register({
-  id: "apkManifest", cat: "forensic", name: "APK Manifest 解析",
+  id: "apkManifest", cat: "filefmt", name: "APK Manifest 解析",
   desc: "Android 的 AndroidManifest.xml（二进制 AXML 或明文）直接解出：包名 package、权限 uses-permission/uses-permission-sdk-23、四大组件 activity/service/receiver/provider 全列出，附逐元素属性表。AXML 字符串池 UTF-8/UTF-16 双格式，typed 值（字符串/整型/布尔/资源引用/颜色）都还原",
   params: [
     { key: "inputEnc", label: "输入编码（文本输入时）", type: "select", default: "auto",

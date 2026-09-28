@@ -122,7 +122,7 @@ function bruteforce(target, maxLen, charsetName, cap) {
 
 register({
   id: "crc32Collision",
-  cat: "forensic",
+  cat: "crack",
   name: "CRC32 碰撞爆破",
   desc: "对目标 CRC32（标准 IEEE/zip CRC）穷举短明文反查原文。CTF misc 里 ZIP 存小文件、只知 CRC 时用。表驱动增量计算",
   params: [

@@ -124,10 +124,10 @@ export default {
   subCipherSolver: {
     what: "Automatic monoalphabetic substitution solver: without a key, uses a hill-climbing algorithm to find the 26-letter substitution mapping and directly outputs the plaintext.",
     principle:
-      "Treat the 'ciphertext letter → plaintext letter' mapping as a permutation to optimize. Score candidate plaintexts with English quadgram log-probabilities, randomly swap two letters' mappings, accept if the score improves and accept a worse score with some probability (hill climbing / annealing), and iterate repeatedly until it converges on the best mapping.",
+      "Treat the 'ciphertext letter → plaintext letter' mapping as a permutation to optimize. Score candidate plaintexts with English N-gram (mainly quadgram) log-probabilities, repeatedly try swapping two letters' mappings and keep the better one; after convergence, perturb the current best slightly and climb again (iterated local search) to cross local optima until the global best.",
     usage: "Paste a sufficiently long monoalphabetic substitution ciphertext (longer is more accurate); the tool hill-climbs automatically and outputs the recovered mapping and plaintext.",
     examples: [{ in: "a fairly long monoalphabetic substitution ciphertext", out: "recovered plaintext + 26-letter mapping table" }],
-    tips: ["On too-short ciphertext (<100 characters) hill climbing easily gets stuck in local optima; run it several times and take the best result. Digits/symbols don't matter, it only solves the letters."],
+    tips: ["On too-short ciphertext (<100 characters) hill climbing easily gets stuck in local optima; run it several times and take the best result. Digits/symbols don't matter, it only solves the letters.", "Letters you have confirmed can be locked via the Known mapping parameter (e.g. XH=TH meaning X→T, H→H) to speed up convergence."],
     aka: ["substitution solver", "单表替换求解", "爬山破解", "单表替换破解", "substitution cracker",
       "hill climbing", "爬山算法", "模拟退火破解", "quadgram", "四元组打分", "自动替换求解", "monoalphabetic solver"],
   },

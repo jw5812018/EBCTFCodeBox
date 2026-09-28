@@ -408,7 +408,7 @@ function push32At(out, at, v, le) {
 // ============ register ============
 
 register({
-  id: "elfInfo", cat: "forensic", name: "ELF 可执行信息",
+  id: "elfInfo", cat: "filefmt", name: "ELF 可执行信息",
   desc: "ELF 头信息一览（格式/架构/位数/字节序/类型/入口点），并解出动态链接细节：PT_INTERP 解释器路径、DT_NEEDED 依赖库、是否共享库（ET_DYN≈.so/PIE）。拿到 ELF 先看架构/位数选引擎，再决定是否 PIE",
   params: [
     { key: "inputEnc", label: "输入编码（文本输入时）", type: "select", default: "auto",

@@ -1,7 +1,7 @@
 /*
- * prngAttack.js — PRNG 破解（LCG 参数恢复 + MT19937 状态恢复，cat:'crypto'，run 型）。
+ * prngAttack.js — PRNG 破解（LCG 参数恢复 +7 状态恢复，cat:'crypto'，run 型）。
  *
- * 定位：CTF crypto 高频题。Python random（MT19937）预测、glibc rand（LCG）参数恢复
+ * 定位：CTF crypto 高频题。Python random7）预测、glibc rand（LCG）参数恢复
  * 给定连续输出反推内部状态，预测/还原后续随机数。对应 ctf-wiki crypto/prng/。
  *
  * 两模式：
@@ -13,7 +13,7 @@
  * a = t_{n+1} * t_n^{-1} mod m
  * c = x_{n+1} - a*x_n mod m
  * 用户可选填 m（已知模数如 2^31 加速）；不填且 ≥5 输出则差值 gcd 推 m。
- * 2) MT19937（Python random 标准引擎）：给定 624 个连续 32 位输出，逆向 temper
+ * 2)7（Python random 标准引擎）：给定 624 个连续 32 位输出，逆向 temper
  * 恢复 624 字 state，再 forward 一轮（generate）输出第 625 个值。
  * temper: y^=y>>11; y^=(y<<7)&0x9d2c5680; y^=(y<<15)&0xefc60000; y^=y>>18
  * 逆向 4 步可恢复原 state。
@@ -27,7 +27,7 @@
  *
  * 参考：
  * - LCG 参数恢复：cryptopals Set 3 / ctf-wiki crypto/prng/introduction
- * - MT19937 untemper：Python random 源码 + ctf-wiki crypto/prng/problem
+ * -7 untemper：Python random 源码 + ctf-wiki crypto/prng/problem
  */
 import { register } from "./registry.js";
 
@@ -145,9 +145,9 @@ function lcgRecover(xs, knownM) {
 }
 
 // ============================================================
-// MT19937 状态恢复（untemper + regenerate）
+//7 状态恢复（untemper + regenerate）
 // ============================================================
-// Python random 用 MT19937：32 位 state[624]，index 指针。每次输出走 temper。
+// Python random 用7：32 位 state[624]，index 指针。每次输出走 temper。
 // temper(y): y^=y>>11; y^=(y<<7)&0x9d2c5680; y^=(y<<15)&0xefc60000; y^=y>>18
 // untemper 反向 4 步可从输出反推 state。
 
@@ -232,7 +232,7 @@ function undoLeftShiftXorMask(y, n, mask) {
 }
 
 /**
- * MT19937 状态恢复：给 624 个连续 32 位输出，返回完整 state + 下一个输出。
+ *7 状态恢复：给 624 个连续 32 位输出，返回完整 state + 下一个输出。
  */
 function mt19937Recover(outputs) {
   if (outputs.length < MT_N) {

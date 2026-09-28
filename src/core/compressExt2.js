@@ -31,8 +31,7 @@
  *              参照 Go 标准库 compress/bzip2 与 dsnet/compress 格式文档的语义自研，
  *              未拷代码。对拍：Git Bash bzip2 / python bz2 生成样本。
  *
- * 测试：资料/工程留存/T508/批3_压缩校验/test.mjs（dCode 向量 + 真实 GIF/bzip2/lz4
- * 样本对拍 + 往返 + 异常路径）。
+ * 测试：dCode 向量 + 真实 GIF/bzip2/lz4 样本对拍 + 往返 + 异常路径。
  * 红线：compress.js 等既有文件零改动；本文件只新建。输入输出全部本地计算，零外发。
  */
 import { register } from "./registry.js";
@@ -181,7 +180,7 @@ function rleDecode(text, p) {
 }
 
 register({
-  id: "rle", cat: "forensic", name: "RLE 行程编码",
+  id: "rle", cat: "archive", name: "RLE 行程编码",
   desc: "游程编码：计前式 4A3B=AAAABB / 计后式 A4B3 / 打包式 count+value 字节对(hex)；变长或定长计数，双向",
   params: [
     { key: "fmt", label: "格式", type: "select", default: "countFirst",
@@ -368,11 +367,85 @@ function lzwDecodeFixed(bytes, width) {
   return { bytes: out, sawEod: false };
 }
 
+/* ---- TIFF 6.0 §13 档：MSB-first 位流 + early change（≠ GIF 档的 LSB-first/非 early） ----
+ * 规范：TIFF 6.0（Adobe，Final 1992-06-03；1995-03 修订说明「LZW 节更清楚地说明何时切换编码
+ * 位长」）§13 LZW Compression, pp.57-61：码 0-255 为单字节字母表、256=Clear、257=EOI、
+ * 首新码 258，码长 9→12 位，码本满须先发 Clear。参考实现 libtiff 4.7.1 tif_lzw.c（头注
+ * 「Aldus does code length transitions one code earlier than should be done」）：
+ *   - 编码侧：发码后登记新码，next 超过 2^nbits-1 即加宽；next == 4095 时发 Clear 并复位到 9 位；
+ *   - 解码侧：登记新码后 next 超过 2^nbits-2 即加宽（与编码侧对齐一个码，即 early change）；
+ *   - 条带末尾允许只补 0 位而无 EOI（解码器容忍），故本档不强制 sawEoi。
+ * earlyChange=false 走「非 early」口径（部分历史/越界实现的 TIFF 流）。
+ */
+const TIFF_CLEAR = 256, TIFF_EOI = 257, TIFF_FIRST = 258, TIFF_NEXT_MAX = 4095;
+
+/** TIFF 档 LZW 编码（libtiff 4.7.1 tif_lzw.c 口径；strip 起始发 Clear）。 */
+function lzwEncodeTiffCore(bytes) {
+  const w = new BitWriter(); // MSB-first
+  let dict, next, width;
+  const reset = () => {
+    dict = new Map();
+    for (let i = 0; i < 256; i++) dict.set(String.fromCharCode(i), i);
+    next = TIFF_FIRST; width = 9;
+  };
+  reset();
+  w.write(TIFF_CLEAR, width);
+  if (bytes.length === 0) { w.write(TIFF_EOI, width); return w.finish(); }
+  let cur = String.fromCharCode(bytes[0]);
+  for (let i = 1; i < bytes.length; i++) {
+    const c = String.fromCharCode(bytes[i]);
+    const nc = cur + c;
+    if (dict.has(nc)) { cur = nc; continue; }
+    w.write(dict.get(cur), width);
+    dict.set(nc, next++);
+    if (next === TIFF_NEXT_MAX) { w.write(TIFF_CLEAR, width); reset(); } // 码本满：当前位宽下发 Clear 再复位
+    else if (next > (1 << width) - 1 && width < 12) width++;
+    cur = c;
+  }
+  w.write(dict.get(cur), width);
+  w.write(TIFF_EOI, width);
+  return w.finish();
+}
+
+/** TIFF 档 LZW 解码；返回 { bytes, sawEoi }（sawEoi=false 表示条带末尾无 EOI，按 TIFF 真流容忍）。 */
+function lzwDecodeTiffCore(bytes, earlyChange = true) {
+  const r = new BitReader(bytes); // MSB-first
+  let dict, next, width, prev;
+  const reset = () => {
+    dict = [];
+    for (let i = 0; i < 256; i++) dict[i] = [i];
+    dict.length = TIFF_FIRST; // 256/257 槽位保留：dict.length == 下一可分配码
+    next = TIFF_FIRST; width = 9; prev = null;
+  };
+  reset();
+  const shift = earlyChange ? 2 : 1; // early：next > 2^w-2 加宽；非 early：next > 2^w-1
+  const out = [];
+  while (true) {
+    const code = r.read(width);
+    if (code === null) break; // 条带末尾补 0 位（无 EOI）——TIFF 真流允许
+    if (code === TIFF_CLEAR) { reset(); continue; }
+    if (code === TIFF_EOI) return { bytes: out, sawEoi: true };
+    let entry;
+    if (code < dict.length) entry = dict[code];
+    else if (code === dict.length && prev) entry = prev.concat([prev[0]]); // KwKwK
+    else throw new Error(`LZW（TIFF 档）：码 ${code} 超出码本（当前 ${dict.length}）——early change 口径或位流与编码时不一致。`);
+    out.push(...entry);
+    if (prev) {
+      if (next >= 4096) throw new Error("LZW（TIFF 档）：码本已满（4096 项）仍继续登记新码——TIFF 规范要求此时先发 Clear 码。");
+      dict[next++] = prev.concat([entry[0]]);
+      if (next > (1 << width) - shift && width < 12) width++;
+    }
+    prev = entry;
+  }
+  return { bytes: out, sawEoi: false };
+}
+
 const bytesToHexLower = (arr) => Array.from(arr, (x) => x.toString(16).padStart(2, "0")).join("");
 
 function lzwEncode(text, p) {
   const mode = (p && p.mode) || "gif";
   const bytes = te(String(text ?? ""));
+  if (mode === "tiff") return bytesToHexLower(lzwEncodeTiffCore(bytes));
   if (mode === "fixed") {
     const width = Math.max(9, Math.min(16, Number((p && p.fixedBits) || 12) | 0));
     return bytesToHexLower(lzwEncodeFixed(bytes, width));
@@ -393,6 +466,13 @@ function lzwDecode(text, p) {
   } catch {
     throw new Error("LZW：输入不是合法 hex/base64（应为编码输出的 hex 位流）。");
   }
+  if (mode === "tiff") {
+    const earlyChange = !(p && p.earlyChange === false);
+    const out = lzwDecodeTiffCore(bytes, earlyChange).bytes;
+    // 像素/二进制数据按「合法 UTF-8 文本则给文本，否则给完整 hex」输出（不截断、不静默替换字节）
+    const bo = bytesToOutput(new Uint8Array(out));
+    return bo.mode === "text" ? bo.text : bytesToHexLower(out);
+  }
   let res;
   if (mode === "fixed") {
     const width = Math.max(9, Math.min(16, Number((p && p.fixedBits) || 12) | 0));
@@ -407,14 +487,16 @@ function lzwDecode(text, p) {
 }
 
 register({
-  id: "lzw", cat: "forensic", name: "标准 LZW（GIF/TIFF）",
-  desc: "经典变长码本 LZW（GIF 档：LSB-first 位流、初始 256 项字节字典、clear 256 / EOD 257、9→12 位变宽；定长档：MSB-first 定长 N 位，hex 呈现）。≠ 既有 LZString op（JS 库变体，不等价）",
+  id: "lzw", cat: "archive", name: "标准 LZW（GIF/TIFF）",
+  desc: "经典变长码本 LZW 三档——GIF 档：LSB-first 位流、初始 256 项字节字典、clear 256 / EOD 257、9→12 位变宽；TIFF 档：MSB-first 位流 + early change（码长在码本 511/1023/2047 项时切换）、clear 256 / EOI 257、首新码 258、码本满先发 clear，条带末尾无 EOI 也容忍，输出为字节流（合法 UTF-8 给文本，否则给完整 hex）；定长档：MSB-first 定长 N 位，hex 呈现。≠ 既有 LZString op（JS 库变体，不等价）",
   params: [
     { key: "mode", label: "模式", type: "select", default: "gif",
       options: [
         { value: "gif", label: "GIF 变宽（clear/EOD，9→12 位）" },
+        { value: "tiff", label: "TIFF 6.0 档（MSB-first + early change）" },
         { value: "fixed", label: "定长 N 位（无 clear/EOD）" },
       ] },
+    { key: "earlyChange", label: "TIFF 档码长切换提前一个码（early change，默认开；关=非 early 口径）", type: "bool", default: true },
     { key: "maxWidth", label: "位宽上限（GIF 式，默认 12）", type: "number", default: 12 },
     { key: "minCodeSize", label: "minCodeSize（2-8，GIF 数据段用，默认 8）", type: "number", default: 8 },
     { key: "fixedBits", label: "定长位宽 N（9-16，定长档用）", type: "number", default: 12 },
@@ -506,7 +588,7 @@ function eliasDecode(text, p) {
 }
 
 register({
-  id: "elias", cat: "forensic", name: "Elias Gamma/Delta 编码",
+  id: "elias", cat: "archive", name: "Elias Gamma/Delta 编码",
   desc: " universal 前缀码：gamma = ⌊log₂x⌋ 个 0 + 二进制原码；delta = gamma(⌊log₂x⌋+1) + 尾段。正整数 ↔ 位串双向",
   params: [
     { key: "mode", label: "编码族", type: "select", default: "gamma",
@@ -694,7 +776,27 @@ function lz4DecompressBlockInto(src, outBase, out, label) {
   return out;
 }
 
-function lz4DecompressFrame(bytes) {
+/**
+ * 取「历史窗口」= 外部字典尾部 + 已解码输出尾部（链接块/带字典块的历史）。
+ * dict 可为 null；cap 为窗口上限。
+ */
+function lz4History(dict, out, cap) {
+  const dLen = dict ? Math.min(dict.length, cap) : 0;
+  const oStart = Math.max(0, out.length - (cap - dLen));
+  const n = dLen + (out.length - oStart);
+  const res = new Uint8Array(n);
+  let k = 0;
+  if (dLen) for (let j = dict.length - dLen; j < dict.length; j++) res[k++] = dict[j];
+  for (let j = oStart; j < out.length; j++) res[k++] = out[j];
+  return res;
+}
+
+/**
+ * LZ4 帧解压（含外部字典）。
+ * dict：外部字典字节（Uint8Array|null）；info：可选出参，回填 { dictId }（帧描述符声明值，-1 表示无）。
+ * 帧描述符带 Dict-ID 标志时，字典须与压缩时完全一致才可解（LZ4 Frame Format 1.6.4「Dictionary ID」节）。
+ */
+function lz4DecompressFrame(bytes, dict, info) {
   if (bytes.length < 7) throw new Error("LZ4 帧：数据过短。");
   if (!((bytes[0] === 0x04) && (bytes[1] === 0x22) && (bytes[2] === 0x4D) && (bytes[3] === 0x18)))
     throw new Error("LZ4 帧：magic 不符（应为 04 22 4D 18 = 0x184D2204）。");
@@ -718,17 +820,21 @@ function lz4DecompressFrame(bytes) {
     for (let k = 7; k >= 0; k--) contentSize = contentSize * 256 + bytes[i + k]; // LE → Number
     i += 8;
   }
+  let dictId = -1;
   if (hasDictId) {
     if (i + 4 > bytes.length) throw new Error("LZ4 帧：Dict-ID 字段不足 4 字节。");
+    dictId = (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] * 0x1000000)) >>> 0;
     i += 4;
-    throw new Error("LZ4 帧：带外部字典（Dict-ID），本工具无字典数据无法解压。");
   }
+  if (info) info.dictId = dictId;
   if (i + 1 > bytes.length) throw new Error("LZ4 帧：缺 HC 头校验字节。");
   const hc = bytes[i++];
   const wantHc = (xxh32(bytes.subarray(4, i - 1)) >>> 8) & 0xff;
   if (hc !== wantHc) throw new Error(`LZ4 帧：头校验 HC 不符（读到 ${hc.toString(16).padStart(2, "0")}，应为 ${wantHc.toString(16).padStart(2, "0")}）——帧头损坏。`);
   const out = [];
   const windowCap = 65536 + 4 * 1024 * 1024; // 链接块窗口上限（64KB 偏移 + 4MB 块）
+  // 外部字典：LZ4 偏移上限 65535，故只需字典末 64KB 参与历史（更早的字节任何偏移都够不到）
+  const dictHist = dict && dict.length ? dict.subarray(Math.max(0, dict.length - 65536)) : null;
   while (true) {
     if (i + 4 > bytes.length) throw new Error("LZ4 帧：块大小字段越界（流在块中截断）。");
     let bsz = (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] * 0x1000000)) >>> 0;
@@ -749,9 +855,11 @@ function lz4DecompressFrame(bytes) {
     if (uncompressed) {
       for (const b of data) out.push(b);
     } else if (bIndep) {
-      lz4DecompressBlockInto(data, [], out, "LZ4 帧");
+      // 独立块：每块都以同一外部字典起始（无字典即空历史）
+      lz4DecompressBlockInto(data, dictHist || [], out, "LZ4 帧");
     } else {
-      const base = out.slice(Math.max(0, out.length - windowCap)); // 链接块：历史 64KB+ 窗口作字典
+      // 链接块：历史 = 外部字典（仅帧首一次）+ 已解数据，滚动保留 64KB+ 窗口
+      const base = lz4History(dictHist, out, windowCap);
       lz4DecompressBlockInto(data, base, out, "LZ4 帧");
     }
   }
@@ -824,7 +932,22 @@ function lz4DecRun(text, p) {
     if (bytes.length === 0) throw new Error("LZ4：输入为空。");
     out = lz4DecompressBlockInto(bytes, [], [], "LZ4 块");
   } else {
-    out = lz4DecompressFrame(bytes);
+    const info = {};
+    let dictBytes = null;
+    if (p && typeof p.dict === "string" && p.dict.trim() !== "") {
+      try {
+        dictBytes = inputToBytes(p.dict, { inputEnc: (p && p.dictEnc) || "auto" });
+      } catch {
+        throw new Error("LZ4：外部字典不是合法 hex/base64/UTF-8（可显式选「外部字典编码」）。");
+      }
+    }
+    try {
+      out = lz4DecompressFrame(bytes, dictBytes, info);
+    } catch (e) {
+      if (info.dictId >= 0 && !(dictBytes && dictBytes.length))
+        throw new Error(`${e.message}（该帧声明外部字典 Dict-ID=0x${info.dictId.toString(16).padStart(8, "0")}：请在「外部字典」参数里提供与压缩时同一份字典）`);
+      throw e;
+    }
   }
   const outU8 = new Uint8Array(out);
   const r = bytesToOutput(outU8);
@@ -838,8 +961,8 @@ function lz4DecRun(text, p) {
 }
 
 register({
-  id: "lz4Dec", cat: "forensic", name: "LZ4 解压",
-  desc: "块格式（token 高 4 位字面量/低 4 位匹配 + 255 续位 + 2 字节小端偏移）与帧格式（magic 0x184D2204、xxh32 头/块/内容校验）解压；hex/base64 输入自动识别",
+  id: "lz4Dec", cat: "archive", name: "LZ4 解压",
+  desc: "块格式（token 高 4 位字面量/低 4 位匹配 + 255 续位 + 2 字节小端偏移）与帧格式（magic 0x184D2204、xxh32 头/块/内容校验）解压；支持帧外部字典（Dict-ID + 「外部字典」参数），hex/base64 输入自动识别",
   params: [
     { key: "fmt", label: "格式", type: "select", default: "auto",
       options: [
@@ -853,6 +976,13 @@ register({
         { value: "hex", label: "Hex" },
         { value: "base64", label: "Base64" },
         { value: "utf8", label: "UTF-8 文本" },
+      ] },
+    { key: "dict", label: "外部字典（帧带 Dict-ID 时，与压缩同源的字典字节；hex/base64 自动识别）", type: "textarea", rows: 4, placeholder: "可选：提供帧描述符声明的外部字典" },
+    { key: "dictEnc", label: "外部字典编码", type: "select", default: "auto",
+      options: [
+        { value: "auto", label: "自动（hex/base64/UTF-8）" },
+        { value: "hex", label: "Hex" },
+        { value: "base64", label: "Base64" },
       ] },
     { key: "toFile", label: "二进制结果输出为文件", type: "bool", default: false },
   ],
@@ -888,6 +1018,84 @@ const BZ2_CRC_TABLE = (() => {
   }
   return t;
 })();
+
+/* bzip2 随机化档（deprecated randomised block）：
+ * 参考实现 bzip2/libbzip2 1.0.x：
+ *   - 表：randtable.c 的 Int32 BZ2_rNums[512]（下列 512 个数逐项同原型，未拷代码）；
+ *   - 逐字节掩码语义（bzlib_private.h）：BZ_RAND_INIT_MASK 置 rNToGo=rTPos=0；
+ *     每读 1 字节执行 BZ_RAND_UPD_MASK（rNToGo==0 时取 BZ2_rNums[rTPos] 并循环 512，
+ *     然后 rNToGo--），随后按 BZ_RAND_MASK 取 (rNToGo==1)?1:0 与字节异或；
+ *   - 使用点（bzlib.c unRLE_obuf_to_output_FAST/SMALL）：BWT 输出流（即 RLE1 流）每个字节
+ *     读入后立即异或该掩码位，再按 RLE1（4 连字节 + 计数字节）展开。
+ * 故本实现只需在 BWT 逆变换的走链顺序上逐字节套同一掩码。 */
+const BZ2_RNUMS = new Uint16Array([
+  619, 720, 127, 481, 931, 816, 813, 233, 566, 247,
+  985, 724, 205, 454, 863, 491, 741, 242, 949, 214,
+  733, 859, 335, 708, 621, 574, 73, 654, 730, 472,
+  419, 436, 278, 496, 867, 210, 399, 680, 480, 51,
+  878, 465, 811, 169, 869, 675, 611, 697, 867, 561,
+  862, 687, 507, 283, 482, 129, 807, 591, 733, 623,
+  150, 238, 59, 379, 684, 877, 625, 169, 643, 105,
+  170, 607, 520, 932, 727, 476, 693, 425, 174, 647,
+  73, 122, 335, 530, 442, 853, 695, 249, 445, 515,
+  909, 545, 703, 919, 874, 474, 882, 500, 594, 612,
+  641, 801, 220, 162, 819, 984, 589, 513, 495, 799,
+  161, 604, 958, 533, 221, 400, 386, 867, 600, 782,
+  382, 596, 414, 171, 516, 375, 682, 485, 911, 276,
+  98, 553, 163, 354, 666, 933, 424, 341, 533, 870,
+  227, 730, 475, 186, 263, 647, 537, 686, 600, 224,
+  469, 68, 770, 919, 190, 373, 294, 822, 808, 206,
+  184, 943, 795, 384, 383, 461, 404, 758, 839, 887,
+  715, 67, 618, 276, 204, 918, 873, 777, 604, 560,
+  951, 160, 578, 722, 79, 804, 96, 409, 713, 940,
+  652, 934, 970, 447, 318, 353, 859, 672, 112, 785,
+  645, 863, 803, 350, 139, 93, 354, 99, 820, 908,
+  609, 772, 154, 274, 580, 184, 79, 626, 630, 742,
+  653, 282, 762, 623, 680, 81, 927, 626, 789, 125,
+  411, 521, 938, 300, 821, 78, 343, 175, 128, 250,
+  170, 774, 972, 275, 999, 639, 495, 78, 352, 126,
+  857, 956, 358, 619, 580, 124, 737, 594, 701, 612,
+  669, 112, 134, 694, 363, 992, 809, 743, 168, 974,
+  944, 375, 748, 52, 600, 747, 642, 182, 862, 81,
+  344, 805, 988, 739, 511, 655, 814, 334, 249, 515,
+  897, 955, 664, 981, 649, 113, 974, 459, 893, 228,
+  433, 837, 553, 268, 926, 240, 102, 654, 459, 51,
+  686, 754, 806, 760, 493, 403, 415, 394, 687, 700,
+  946, 670, 656, 610, 738, 392, 760, 799, 887, 653,
+  978, 321, 576, 617, 626, 502, 894, 679, 243, 440,
+  680, 879, 194, 572, 640, 724, 926, 56, 204, 700,
+  707, 151, 457, 449, 797, 195, 791, 558, 945, 679,
+  297, 59, 87, 824, 713, 663, 412, 693, 342, 606,
+  134, 108, 571, 364, 631, 212, 174, 643, 304, 329,
+  343, 97, 430, 751, 497, 314, 983, 374, 822, 928,
+  140, 206, 73, 263, 980, 736, 876, 478, 430, 305,
+  170, 514, 364, 692, 829, 82, 855, 953, 676, 246,
+  369, 970, 294, 750, 807, 827, 150, 790, 288, 923,
+  804, 378, 215, 828, 592, 281, 565, 555, 710, 82,
+  896, 831, 547, 261, 524, 462, 293, 465, 502, 56,
+  661, 821, 976, 991, 658, 869, 905, 758, 745, 193,
+  768, 550, 608, 933, 378, 286, 215, 979, 792, 961,
+  61, 688, 793, 644, 986, 403, 106, 366, 905, 644,
+  372, 567, 466, 434, 645, 210, 389, 550, 919, 135,
+  780, 773, 635, 389, 707, 100, 626, 958, 165, 504,
+  920, 176, 193, 713, 857, 265, 203, 50, 668, 108,
+  645, 990, 626, 197, 510, 357, 358, 850, 858, 364,
+  936, 638,
+]);
+
+/** 逐字节随机化掩码（BZ_RAND_INIT_MASK / BZ_RAND_UPD_MASK / BZ_RAND_MASK 的字面语义）。 */
+function makeBz2RandBit() {
+  let rNToGo = 0, rTPos = 0;
+  return () => {
+    if (rNToGo === 0) {
+      rNToGo = BZ2_RNUMS[rTPos];
+      rTPos++;
+      if (rTPos === 512) rTPos = 0;
+    }
+    rNToGo--;
+    return rNToGo === 1 ? 1 : 0;
+  };
+}
 function bz2Crc(bytes) {
   let c = 0xffffffff;
   for (const b of bytes) c = ((BZ2_CRC_TABLE[(c >>> 24) ^ b] ^ ((c << 8) >>> 0)) >>> 0);
@@ -933,7 +1141,8 @@ class Bz2Huffman {
 
 function bz2ReadBlock(r, blockSize) {
   const wantCrc = r.readBits(32) >>> 0;
-  if (r.readBit() !== 0) throw new Error("bzip2：废弃的 randomized 档案（bit=1），本工具不支持。");
+  const randomised = r.readBit() === 1; // 0.9.0 时代的 randomized 档；0.9.5+ 不再产出但参考实现仍可解码
+  const randBit = randomised ? makeBz2RandBit() : null;
   const origPtr = r.readBits(24);
   // 符号位图（16×16 两级）
   const hi = r.readBits(16);
@@ -1031,13 +1240,15 @@ function bz2ReadBlock(r, blockSize) {
     c[b]++;
   }
   // 走链 + RLE1 尾游程解码（4 连同字节后跟一个计数字节）
+  // 随机化档：BWT 输出流每个字节读入即异或掩码位（与参考实现同序、同位置）
   const out = [];
   let tPos = tt[origPtr] >>> 8;
   let lastByte = -1, byteRepeats = 0, repeats = 0;
   for (let used = 0; used < bufIndex; used++) {
     tPos = tt[tPos];
-    const b = tPos & 0xff;
+    let b = tPos & 0xff;
     tPos >>>= 8;
+    if (randBit) b ^= randBit();
     if (byteRepeats === 3) {
       repeats = b;
       byteRepeats = 0;
@@ -1116,8 +1327,8 @@ function bzip2DecRun(text, p) {
 }
 
 register({
-  id: "bzip2Dec", cat: "forensic", name: "bzip2 解压",
-  desc: "完整解压链：BZh 头 + π/√2 magic + Huffman(MTF+RUNA/RUNB) + BWT 逆变换 + RLE1 尾游程 + 块/文件 CRC 校验；纯 JS 自研，hex/base64 输入自动识别",
+  id: "bzip2Dec", cat: "archive", name: "bzip2 解压",
+  desc: "完整解压链：BZh 头 + π/√2 magic + Huffman(MTF+RUNA/RUNB) + BWT 逆变换 + RLE1 尾游程 + 块/文件 CRC 校验；含 0.9.0 时代已废弃的 randomized 档（按参考实现 BZ2_rNums 表逐字节反随机化）；纯 JS 自研，hex/base64 输入自动识别",
   params: [
     { key: "inputEnc", label: "输入编码", type: "select", default: "auto",
       options: [
@@ -1135,6 +1346,7 @@ register({
 export {
   rleEncode, rleDecode,
   lzwEncodeGif, lzwDecodeGif, lzwEncodeFixed, lzwDecodeFixed, lzwEncode, lzwDecode,
+  lzwEncodeTiffCore, lzwDecodeTiffCore,
   eliasGammaCode, eliasDeltaCode, eliasEncode, eliasDecode,
   verhoeffChecksum, verhoeffRun,
   xxh32, lz4DecompressBlockInto, lz4DecompressFrame, lz4CompressBlock, lz4DecRun,

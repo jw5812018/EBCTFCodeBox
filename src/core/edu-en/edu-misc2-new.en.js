@@ -134,21 +134,44 @@ export default {
   },
 
   f5stego: {
-    what: "F5 JPEG stego extraction: pulls a hidden byte stream out of an F5-steganographic JPEG using a key. A faithful port of the f5stegojs library; extract only, no embedding.",
+    what: "F5 JPEG stego encode/decode: encode writes a message into the JPEG's DCT coefficients via matrix encoding and repacks; decode pulls a hidden byte stream out of an F5-steganographic JPEG using a key. A faithful port of the f5stegojs library; embed and extract interoperate.",
     principle:
-      "F5 hides data in a JPEG's DCT coefficients (skipping DC coefficients). Extraction flow:\n\n" +
+      "F5 hides data in a JPEG's DCT coefficients (skipping DC coefficients). Flow:\n\n" +
       "1. Entropy-decode the JPEG to get each component's DCT coefficients (take the luminance component Y)\n" +
       "2. Use the key with an RC4-variant PRNG to generate a pseudorandom stream, then Fisher-Yates permute the coefficient order\n" +
-      "3. First extract 4 bits to fix the matrix-encoding parameter k, then extract hashes per the $(1, 2^k-1, k)$ matrix encoding → byte stream, XORing gamma (keystream) throughout\n" +
-      "4. Take the real payload per a 2/3-byte length header\n\n" +
+      "3. Fix the matrix-encoding parameter k, then apply the $(1, 2^k-1, k)$ matrix encoding, XORing gamma (keystream) throughout\n" +
+      "4. Wrap/strip the real payload per a 2/3-byte length header\n\n" +
+      "Encode direction: find a codeword of non-zero coefficients whose parity hash equals the k bits to embed, then tweak coefficients; if none exists, shrink (decrement magnitude, keep sign), and when a coefficient hits 0 it is discarded for the next usable one; k=1 degenerates to sequential LSB. Auto-k picks the largest usable k from the capacity table.\n\n" +
       "The key is the seed of the F5 PRNG (f5stegojs commonly uses an integer byte array like 1,2,3,4,5,6,7, but also supports a passphrase/hex). With a wrong key or a non-f5stegojs sample, the output is noise and the length header will look absurd.",
-    usage: "Drop in a JPEG (or paste hex/base64), enter the key. Key format options: auto / integer list / passphrase text / hex. Output is the hidden bytes as hex + ASCII + UTF-8 + F5 capacity diagnostics + flag hits. Extract only.",
+    usage: "Decode: drop in a JPEG (or paste hex/base64), enter the key; output is the hidden bytes as hex + ASCII + UTF-8 + capacity diagnostics + flag hits. Encode: drop in a carrier JPEG, fill in the key and the message (k = 0 picks automatically); the artifact is a downloadable stego JPEG. Keys must match on both sides.",
     examples: [
       { in: "(an F5-steganographic JPEG)", param: "key=1,2,3,4,5,6,7 keyFormat=ints", out: "extracted byte stream hex/ASCII + diagnostics" },
+      { in: "(an ordinary JPEG carrier)", param: "key=1,2,3,4,5,6,7 message=flag{...}", out: "f5_stego.jpg artifact + embedding stats (k/changes/shrunk)" },
     ],
-    tips: ["Both the key and keyFormat must match; a common f5stegojs form is an integer list like 1,2,3,4,5,6,7.", "Failed extraction or an absurd length header usually means a wrong key, or that the JPEG is original Java F5 (which derives from a passphrase differently and this op doesn't handle)."],
+    tips: ["Both the key and keyFormat must match; a common f5stegojs form is an integer list like 1,2,3,4,5,6,7.", "Failed extraction or an absurd length header usually means a wrong key, or that the JPEG is original Java F5 (which derives from a passphrase differently and this op doesn't handle).", "Re-compressing or rescaling the carrier destroys the payload — transfer the original file; images embedded by this tool interoperate with vanilla f5stegojs."],
     aka: ["f5隐写", "f5 jpeg", "f5stego", "f5stegojs", "jpeg隐写提取", "f5 steganography",
-      "dct系数隐写", "f5提取", "jpeg dct隐写", "f5 extract", "矩阵编码隐写", "F5隐写"],
+      "dct系数隐写", "f5提取", "jpeg dct隐写", "f5 extract", "矩阵编码隐写", "F5隐写",
+      "f5嵌入", "f5 embed", "f5写入", "jpeg隐写嵌入", "f5 隐写加密", "f5 compress"],
+  },
+
+  pcmTransforms: {
+    what: "PCM waveform transforms: five per-sample transforms on WAV (8/16/24/32-bit integer PCM) — channel difference / first-order delta / waveform inversion / time reversal / threshold bitstream — with downloadable WAV or bitstream artifacts. The basic scalpel for audio misc challenges.",
+    principle:
+      "All transforms work pointwise in the sample domain (read back into a centered signed domain):\n\n" +
+      "1. Channel difference L-R: wide-domain subtraction without wrap-around, output as a 32-bit WAV with saturation counting — the first probe for stereo stego\n" +
+      "2. First-order delta $d_n = x_n - x_{n-1}$: delta pushes low-frequency energy near zero, so abnormal energy spots mark human-made edits\n" +
+      "3. Waveform inversion $-x$: fixed-point two's-complement wrap; adding an inverted channel to the original cancels the backing track and leaves the difference track\n" +
+      "4. Time reversal: each channel reversed independently — the first step for backmasking-style challenges\n" +
+      "5. Threshold bitstream: sample $> T$ records 1 else 0 (window mode takes each window's max first), packed LSB-first with run-length stats\n\n" +
+      "Arithmetic is done in a \"wide domain\" then wrapped per bit depth: 16-bit wraps in the int16 domain, 24-bit in $[-2^{23},2^{23})$, 32-bit in the int32 domain — matching numpy's fixed-point wrap; $-x$ wrapping $-2^{15}$ back to itself is an inherent two's-complement asymmetry.",
+    usage: "Drop in a WAV (or paste base64/hex), pick the transform and parameters. Channel difference outputs a 32-bit mono WAV; delta/invert/reverse rebuild a WAV in the original format; the threshold bitstream outputs an LSB-first packed bin plus run-length stats, ready for one-click decoding. IEEE float and compressed formats are rejected explicitly.",
+    examples: [
+      { in: "(a stereo WAV)", param: "mode=chdiff", out: "chdiff.wav + saturation count" },
+      { in: "(a backmasked WAV)", param: "mode=reverse", out: "reversed.wav (listen directly after reversal)" },
+    ],
+    tips: ["A near-zero channel difference means both channels are almost identical — the data is probably not at the channel-difference layer.", "Reversal and inversion are involutions: applying either twice restores the original. The threshold bitstream is irreversible and has no inverse.", "Convert compressed audio (mp3 etc.) to WAV before feeding this op."],
+    aka: ["pcm变换", "pcm transforms", "声道差", "音频声道差", "左右声道差", "波形反相",
+      "音频反相", "时间倒放", "音频倒放", "倒放音频", "一阶差分", "阈值位流", "pcm波形"],
   },
 
   spectrogram: {

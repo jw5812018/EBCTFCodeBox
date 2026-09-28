@@ -28,22 +28,25 @@ export default {
   },
 
   lzw: {
-    what: "LZW（Lempel–Ziv–Welch）——字典序压缩的经典：初始字典装全部单字节（0-255），每读入一个字符就尝试延长当前串，串不在字典里时输出它的编号并把「串+新字符」登记为新条目。GIF 图像数据、TIFF、UNIX compress、PDF 的 LZWDecode 流都用它或其变体。",
+    what: "LZW（Lempel–Ziv–Welch）——字典序压缩的经典：初始字典装全部单字节（0-255），每读入一个字符就尝试延长当前串，串不在字典里时输出它的编号并把「串+新字符」登记为新条目。GIF 图像数据、TIFF、UNIX compress、PDF 的 LZWDecode 流都用它或其变体。TIFF 用的是变体：位流**高位先入**（MSB-first），且码长切换比教科书**提前一个码**。",
     principle:
       "GIF 档口径：初始码本 256 项（单字节），clear 码 = 256（重置码本）、EOD 码 = 257（结束），新串从 258 号开始；码宽从 9 位起步，码本涨到 $2^{w}$ 时加宽到 $w{+}1$ 位，上限 12 位——满了发 clear 重置（GIF 惯例）。位流 LSB-first 打包（GIF 特有：低位先入字节；TIFF 才是 MSB-first）。\n\n" +
-      "解码端每收一个码就输出对应串，同时用「上一串 + 本串首字符」补登新条目——解码器永远比编码器慢一拍，恰好同步。遇到「码 = 下一空位」的 KwKwK 情形（如 AAAAAA），输出 = 上一串 + 上一串首字符。",
-    usage: "编码输入文本 → 输出 hex 位流；解码粘贴 hex（base64 也认）。GIF 文件取证时用 minCodeSize 档（2-8，GIF 数据段前的那个字节）；定长档给固定位宽的变体流（无 clear/EOD）。与既有 LZString op 不是一回事：那是 pieroxy JS 库变体（字典编码与打包都不等价）。",
+      "解码端每收一个码就输出对应串，同时用「上一串 + 本串首字符」补登新条目——解码器永远比编码器慢一拍，恰好同步。遇到「码 = 下一空位」的 KwKwK 情形（如 AAAAAA），输出 = 上一串 + 上一串首字符。\n\n" +
+      "TIFF 档口径（TIFF 6.0 §13）：字母表同为 8 位字节，0–255 单字节、256 = Clear、257 = EOI，首个新码 258，码长 9 位起步、上限 12 位，位流 MSB-first。**early change** 指码本已有 511 项时就把宽度升到 10 位（对应 1023 → 11、2047 → 12），而不是等 512/1024/2048；写满时先发 Clear 再复位到 9 位。条带（strip）末尾允许只补 0 位而没有 EOI，解码端要容忍。",
+    usage: "编码输入文本 → 输出 hex 位流；解码粘贴 hex（base64 也认）。GIF 文件取证时用 minCodeSize 档（2-8，GIF 数据段前的那个字节）；定长档给固定位宽的变体流（无 clear/EOD）；**TIFF 条带用「TIFF 6.0」档**，该档另有「码长切换提前一个码」开关（`earlyChange`，默认开），关掉即非 early 口径，仅供少数历史/越界实现使用。与既有 LZString op 不是一回事：那是 pieroxy JS 库变体（字典编码与打包都不等价）。",
     examples: [
       { in: "TOBEORNOTTOBE", param: "GIF 档默认", out: "00a93c1152e48914274fa808241810", desc: "clear + 12 个码 + EOD 的 9 位 LSB 流" },
       { in: "00a93c1152e48914274fa808241810", param: "同档解密", out: "TOBEORNOTTOBE", desc: "往返无损" },
       { in: "mississippi", param: "定长 12 位档", out: "06d0690730731011030700700690", desc: "无 clear/EOD，每码恰 12 位" },
+      { in: "8×4 灰度图的 32 字节像素条带（libtiff 4.7.1 压出 38 字节条带）", param: "TIFF 6.0 档（MSB-first + early change）", out: "解出 32 字节像素，逐字节一致（容忍条带末尾无 EOI）", desc: "权威源 libtiff → 本项目 8/8 组；16384 字节随机像素样本穿越 511/1023/2047 三个码宽切换点仍逐字节一致" },
     ],
     tips: [
       "本 op 已用 PIL 生成的真实 GIF 文件数据段对拍验证（含位宽增长与码本满重置路径）。",
       "GIF 取证套路：文件头找 0x2C 图像描述符 → 读 minCodeSize 字节 → 收集子块 → 粘给本 op（minCodeSize 设成读到的值）。",
       "LZW 的码本随数据自动生长——解码方不需要传字典，这是它胜过 LZ78 工程化的关键。参考 Wikipedia “Lempel–Ziv–Welch”。",
+      "TIFF 档最容易错的就是 early change 那**一个码**：差一码整段错位。本实现固定按参考实现（libtiff `tif_lzw.c`，其头注即写明 Aldus 提前一个码）口径，不做自适应猜测；老版 libtiff 的「Old-style LZW」兼容档（位序相反 + 非 early）与 TIFF Predictor 预处理不在本 op 范围。",
     ],
-    aka: ["lzw", "lzw 压缩", "lempel-ziv-welch", "gif lzw", "lzw 解压", "gif 压缩", "tiff lzw", "字典编码", "lzw 编码", "welch 压缩", "lz78 变体", "lzw codec"],
+    aka: ["lzw", "lzw 压缩", "lempel-ziv-welch", "gif lzw", "lzw 解压", "gif 压缩", "tiff lzw", "tiff lzw 档", "lzw msb-first", "early change", "tiff 6.0 lzw", "字典编码", "lzw 编码", "welch 压缩", "lz78 变体", "lzw codec"],
   },
 
   elias: {
@@ -87,25 +90,29 @@ export default {
   },
 
   lz4Dec: {
-    what: "LZ4 解压——把 LZ4 块格式 / 帧格式还原为原始数据。LZ4 是极致速度取向的 LZ77 族算法：压缩率换速度，解压吞吐可达数 GB/s，Linux 内核、Zstd 的快速档、数据库 WAL 都在用。",
+    what: "LZ4 解压——把 LZ4 块格式 / 帧格式还原为原始数据。LZ4 是极致速度取向的 LZ77 族算法：压缩率换速度，解压吞吐可达数 GB/s，Linux 内核、Zstd 的快速档、数据库 WAL 都在用。帧还可以声明一段**外部字典**参与构成历史前缀。",
     principle:
       "块格式（block format v1.0）：一串「序列」组成。每序列先来一个 token 字节——高 4 位 = 字面量长度（15 表示后跟 255 续位字节累加）、低 4 位 = 匹配长度减 4（同样 15 续位）；然后是字面量数据本体、2 字节小端偏移（1-65535，0 非法）、匹配长度续位。匹配从历史输出里按偏移逐字节拷贝（偏移小于匹配长即天然支持重叠复制）。末序列只有字面量。\n\n" +
-      "帧格式：magic `04 22 4D 18`（0x184D2204）+ FLG/BD 描述字节 + 可选 8 字节内容长 + HC 头校验（xxh32 的第二字节）+ 数据块（4 字节小端尺寸，最高位置 1 = 未压缩存储块）+ `00000000` 结束标记 + 可选 xxh32 内容校验——本工具全链校验。",
-    usage: "输入 hex / base64 自动识别（拖文件走原始字节通道）；格式选自动即按 magic 分流帧/块。二进制结果可勾选输出为文件下载。",
+      "帧格式：magic `04 22 4D 18`（0x184D2204）+ FLG/BD 描述字节 + 可选 8 字节内容长 + HC 头校验（xxh32 的第二字节）+ 数据块（4 字节小端尺寸，最高位置 1 = 未压缩存储块）+ `00000000` 结束标记 + 可选 xxh32 内容校验——本工具全链校验。\n\n" +
+      "外部字典（LZ4 Frame Format 1.6.4）：帧描述符的 `DictID` 标志位（FLG bit0）置位时，声明另有一段帧外字节充当「已知历史前缀」。语义是——独立块（B.Indep=1）时**每块**都以同一字典起始；链接块（B.Indep=0）时字典**只在帧首用一次**，其后历史滚动为「字典 + 已解数据」。偏移是 16 位、上限 65535，所以字典只有**末 64 KB** 可达。字典本身不在帧里：规范只给一个 32 位 `Dict-ID` 作标识，**未规定**它的推导算法，必须由外部提供同一份字节。",
+    usage: "输入 hex / base64 自动识别（拖文件走原始字节通道）；格式选自动即按 magic 分流帧/块。**带外部字典的帧**：把字典字节（hex 或 base64）填进「外部字典」参数，编码档默认自动识别；无字典时本工具先尝试解码，失败才提示需要字典，不无条件拒绝。二进制结果可勾选输出为文件下载。",
     examples: [
       { in: "6868656c6c6f2006005068656c6c6f", param: "块格式", out: "hello hello hello hello", desc: "python lz4.block 生成：6 字面量 + 偏移 6 匹配 + 5 字面量收尾" },
       { in: "04224d187c4029000000000000004716000000cf68656c6c6f20776f726c64200c00055068656c6c6f8f08a7e9000000006035edd7", param: "帧格式（自动档）", out: "hello world hello world hello world hello", desc: "帧头校验/块校验/内容 xxh32 校验全开、全过" },
+      { in: "带 `Dict-ID=0x5a5a0001` 的字典帧（独立块与链接块两份）", param: "格式=帧，外部字典=该帧对应的 64 KB 字典字节", out: "解出 5062 字节载荷，与原数据逐字节一致", desc: "权威源 liblz4 生成 → 本项目解码：字典帧 6/6、裸块+字典 3/3 全过；同帧不提供字典则与 liblz4 一样报解压失败" },
     ],
     tips: [
       "hex 以 04224d18 开头是帧、直接喂裸序列是块——自动档看 magic 分流，无需手选。",
       "对拍源是 python lz4 库（块 + 帧含校验和全开的样本）；xxh32 实现经真帧校验和验证。",
       "LZ4 高压缩档常配 zstd 出场；取证时 trailer 里扒出的 .lz4 文件直接 hex 喂进来。参考 github.com/lz4/lz4 的 Block/Frame format 文档。",
+      "字典**错一个字节**就解错或校验失败（内容校验是 xxh32），不存在「近似可用」；且只有末 64 KB 参与，更早的字典字节不可达。",
+      "帧声明了 `Dict-ID` 但块其实没引用字典时仍可无字典解出——本工具先试后提示，不直接拒绝。",
     ],
-    aka: ["lz4 解压", "lz4 decompress", "lz4", "lz4 块格式", "lz4 frame", "lz4 帧格式", "from lz4", "lz4 decode", "unlz4", "lz4 block format", "lz4decompress", "0x184d2204"],
+    aka: ["lz4 解压", "lz4 decompress", "lz4", "lz4 块格式", "lz4 frame", "lz4 帧格式", "lz4 外部字典", "lz4 dictionary", "lz4 字典帧", "dict-id", "from lz4", "lz4 decode", "unlz4", "lz4 block format", "lz4decompress", "0x184d2204"],
   },
 
   bzip2Dec: {
-    what: "bzip2 解压——完整还原 BZh 流：三层游程 + BWT + MTF + 多表 Huffman 的经典压缩链。bzip2 以「压得比 gzip 狠、比 XZ 快」著称，Linux 发行版的源码包与 tar.bz2 取证是它的主场。",
+    what: "bzip2 解压——完整还原 BZh 流：三层游程 + BWT + MTF + 多表 Huffman 的经典压缩链。bzip2 以「压得比 gzip 狠、比 XZ 快」著称，Linux 发行版的源码包与 tar.bz2 取证是它的主场。老档案里那个早已废弃的**随机化（randomised）档**也一并支持。",
     principle:
       "五级流水线（解压逆序执行）：\n\n" +
       "1. RLE1：4 连同字节后跟一个计数字节（0-255 个续份）；\n" +
@@ -113,17 +120,21 @@ export default {
       "3. MTF：前移编码把局部性变成小数字；\n" +
       "4. RLE2：0 游程编成 RUNA/RUNB 双基数字（$1,2$ 交替进位累加）；\n" +
       "5. Huffman：2-6 棵规范树，每 50 个符号按选择子（MTF+一元码）换树；码长 5 位基值 ±1 delta 存储；EOB 收尾。\n\n" +
-      "块头：48 位 magic `0x314159265359`（π）、CRC-32/BZIP2（多项式 0x04C11DB7、MSB-first）；流尾 magic `0x177245385090`（√2）+ 组合 CRC。块 CRC 与文件 CRC 双重校验，损坏立即报错。",
-    usage: "hex / base64 输入自动识别；文本优先输出，二进制回退 hex（可勾选文件下载）。支持多块大文件与级联 bz2 流。",
+      "块头：48 位 magic `0x314159265359`（π）、CRC-32/BZIP2（多项式 0x04C11DB7、MSB-first）；流尾 magic `0x177245385090`（√2）+ 组合 CRC。块 CRC 与文件 CRC 双重校验，损坏立即报错。\n\n" +
+      "随机化档：早期 bzip2 会在 RLE1 输出（也就是 BWT 的字节流）上逐字节异或一个比特，比特由一个 512 项常量表驱动——每读一字节先把倒计时 $rNToGo$ 减 1（减到 0 就从表里取下一项、表循环 512 项），恰等于 1 时异或比特取 1，否则取 0：$b'_j = b_j \\oplus [\\, rNToGo_j = 1 \\,]$。该块是否随机化由块头里 1 个比特标志（位于 4 字节 `BZh` 头、6 字节块 magic、4 字节块 CRC 之后）；掩码**按块复位**。",
+    usage: "hex / base64 输入自动识别；文本优先输出，二进制回退 hex（可勾选文件下载）。支持多块大文件与级联 bz2 流；带随机化位的块**自动按上述序列还原**，无需额外参数。",
     examples: [
       { in: "425a68393141592653592c41d3c00000059180400006449080200021b5467a810c08f4444ab9860c34d1385dc914e14240b1074f00", param: "bzip2 -9 压缩的样例", out: "hello world hello world hello world", desc: "BZh9 → π magic → 单块 → √2 收尾" },
       { in: "425a683131415926535981b02d8b00000004002000200021184682ee48a70a12103605b160", param: "bzip2 -1 单字符", out: "A", desc: "最微小的合法流" },
+      { in: "带随机化标志位的 BZh 流（老档案）", param: "默认参数（自动识别）", out: "解压结果与权威 libbz2 1.0.8 逐字节一致", desc: "掩码命中若干字节位置；若把随机化位置 1 但数据并未随机化（非法档案），本工具与 libbz2 都报「数据损坏」" },
     ],
     tips: [
       "hex 以 425a68（BZh）开头、尾有 177245385090 前缀——闭眼选它；gzip（1f8b）/xz（fd377a585a）/lzma 各有各的 magic。",
       "多块大文件（>100KB×级别）与级联流都已对拍（python bz2 与 bzip2 CLI 双独立源验证，963KB 样本逐字节一致）。",
       "块 CRC 不符会明确报出期望/实算值——截断或篡改的取证样本一测便知。参考 Wikipedia “bzip2” 与 Go 标准库 compress/bzip2 的语义口径。",
+      "随机化档**只有解码方向**：bzip2 ≥ 0.9.5 已移除随机化编码器，规范侧没有产出方，本工具不编造逆操作。",
+      "该位只影响块内 RLE1 字节流，不碰文件头/尾 magic；损坏一律以 CRC 拒绝，不做「尽力而为」的静默输出。",
     ],
-    aka: ["bzip2 解压", "bzip2 decompress", "bunzip2", "bz2 解压", "bzip2", "bzunzip", "bzip2 decode", "bzh", "tar.bz2 解压", "bzip2 流", "bwt 解压", "0x314159265359"],
+    aka: ["bzip2 解压", "bzip2 decompress", "bunzip2", "bz2 解压", "bzip2", "bzunzip", "bzip2 randomized", "bzip2 随机化档", "randomised bzip2", "bzip2 decode", "bzh", "tar.bz2 解压", "bzip2 流", "bwt 解压", "0x314159265359"],
   },
 };

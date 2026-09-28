@@ -1,3 +1,8 @@
+import "./core/oleExtract.js"; // OLE/CFB 容器静态提取 oleExtract（forensic, run, 目录树+FAT/MiniFAT 取流, 无 detect）
+import { literalMatcher, groupSingleCandidates } from "./core/magic/smartCandidates.js";
+import { createTargetEditor, renderCandidateRow, highlightResult } from "./ui/smartResultView.js";
+import { resultSearchState } from "./ui/resultFilter.js";
+import { loadTargetConfig } from "./core/magic/signals.js";
 /*
  * main.js — 入口 + UI 驱动（全部由 registry 声明式渲染）。
  *
@@ -30,7 +35,9 @@ import { HLSpring } from "./ui/spring.js"; // T510 弹簧动效内核（总开�
 import { pinyinKeys } from "./ui/pinyinSearch.js"; // T514 拼音全拼/首字母搜索兼容层（ksmm=凯撒密码）
 import { FONT_PLANES, loadFontPlane, fontStatus, onFontStatusChange, humanSize, preloadAllPlanes } from "./ui/fontLoader.js";
 import { CTF_HOT, CTF_HOT_META } from "./core/ctfPresets.js";
-import { getEdu, eduAliases, registerEduEn } from "./core/eduContent.js";
+import { eduContentReady, getEduSync, eduAliasesSync } from "./core/eduContent.defer.js"; // T621-B：科普数据懒加载门面（zh 分片 1.4MB 退出首屏关键路径）
+let eduContentSettled = false; // true = 懒加载已落定（成功或失败），renderEduCard 不再等待补渲
+eduContentReady().then(() => { eduContentSettled = true; });
 import EDU_IMAGES from "./core/edu/eduImages.js";
 import { renderMathIn } from "./ui/katexLoader.js";
 import { showLoadingScreen, setLoadingProgress, hideLoadingScreen } from "./ui/loadingScreen.js";
@@ -38,6 +45,8 @@ import { APP_VERSION } from "./core/version.js";
 import { renderEnhancedView, invisibleReport, invisibleToggle } from "./ui/inputEnhance.js";
 import { openEnvPanel } from "./ui/envPanel.js";
 import { resolveDecodeConfig, loadLastConfig, saveLastConfig } from "./core/decodeProfile.js"; // 解码强度档 → op 白名单 + 预算
+import { isExplicitRunOp, explicitRunHint } from "./core/explicitRun.js"; // 重运算 op 显式触发白名单
+import { runOpOffThread, cancelOpRun, opRunBusy } from "./core/opRunClient.js"; // 重 op 独立线程执行（可取消/超时）
 import { openDecodeStrength } from "./ui/decodeStrength.js"; // 「解码强度」弹窗（5 档滑块 + 参与算法多选 + 命名方案）
 import { applyAccent, enableHctEngine, DEFAULT_ACCENT, resetAccent } from "./ui/dynamicColor.js"; // M3 动态取色（HSL 近似 + HCT 精确引擎）
 import { themeVariant } from "./ui/themePicker.js";
@@ -86,6 +95,7 @@ function opDesc(op) {
 import "./core/base.js";
 import "./core/baseExt.js";
 import "./core/text.js";
+import "./core/jsfuck.js";
 import "./core/textExt.js";
 import "./core/fancy.js";
 import "./core/fancy2.js";
@@ -94,6 +104,36 @@ import "./core/txtmoji.js"; // txtmoji.com emoji 加密 txtmoji（fancy, 双向,
 import "./core/keyboard.js";
 import "./core/classic.js";
 import "./core/classicExt2.js"; // 古典密码补全组2（Trithemius）
+import "./core/jefferson.js";
+import "./core/amsco.js";
+import "./core/ragbaby.js";
+import "./core/trilitere.js";
+import "./core/skipCipher.js";
+// 古典补全组（古典二：VIC/Phillips/Bellaso/Slidefair/Collon/DancingMen/Zodiac/Three-square/Monome-Binome，classic 双向，多源向量对拍）
+import "./core/vic.js"; // VIC 密码（classic, 双向, Wikipedia 派生线+Savard 全例逐层复现, 无 detect）
+import "./core/phillips.js"; // Phillips 方阵周期代换（classic, 双向, ACA 64 字母算例向量, 无 detect）
+import "./core/bellaso.js"; // Bellaso 互反多表代换（classic, 双向, dCode 算例向量, 无 detect）
+import "./core/slidefair.js"; // Slidefair 双字母矩形代换（classic, 双向, ACA/DIGRAPH 算例向量, 无 detect）
+import "./core/collon.js"; // Collon 行首列末双字母（classic, 双向, dCode 编码+解码算例向量, 无 detect）
+import "./core/dancingMen.js"; // 跳舞小人 Dancing Men（classic, 双向, Wikipedia 旗标结构向量+dCode 18/26 字母口径, 无 detect）
+import "./core/zodiac.js"; // 黄道十二宫 Z408（classic, 双向, zodiackillerciphers Harden 键 54 符号+历史密文行向量, 无 detect）
+import "./core/threeSquare.js"; // 三方密码 Three-square（classic, 双向, dCode 官方例 UDBJDC→CODE 向量, 无 detect）
+import "./core/monomeBinome.js"; // Monome-Binome 单子双子（classic, 双向, dCode 官方向量 MONOME→34363536345, 无 detect）
+// 编码补全组（编码一：Kuznyechik/IBAN/镜像字母/玛雅·巴比伦·埃及数字/圣书体/SGA/神秘学字母/信号旗，radix+fancy+block，多源向量对拍）
+import "./core/kuznyechik.js"; // Kuznyechik GOST R 34.12-2015（block, 双向, RFC 7801 §5 与 GOST §A.1 同源向量逐字节复现, 无 detect）
+import "./core/iban.js"; // IBAN 校验位 mod-97（radix, 双向, ISO 13616/registry 示例 9 组校验+生成复现, 无 detect）
+import "./core/mirrorLetters.js"; // 镜像字母（fancy, 双向, Unicode 码表 TURNED/REVERSED 命名锚点+官方 Bidi_Mirrored 五对, 无 detect）
+import "./core/mayaNumerals.js"; // 玛雅数字（radix, 双向, dCode/Wikipedia 官方例 14/17/22/26/33/406/360/7200+长纪历, detect unicode块0.6）
+import "./core/babylonianNumerals.js"; // 巴比伦数字（radix, 双向, dCode 14字形表+例 23/61/3842/100 与 Wikipedia 8583 交叉, detect 楔形0.4）
+import "./core/egyptianNumerals.js"; // 埃及数字（radix, 双向, dCode 7符号表+例 123/2001/203/513 逐字, detect 0.5）
+import "./core/hieroglyphs.js"; // 圣书体字母 MdC（fancy, 双向, dCode 20字母编码表+30字形解码表+SPHINX/ankh 例, detect 0.3）
+import "./core/sga.js"; // 银河标准字母 SGA（fancy, 双向, dCode FAQ 26符 Unicode 适配串逐字向量, 无 detect）
+import "./core/occult.js"; // 神秘学字母四件 theban/lunaire/celestial/malachim（fancy, 双向, dCode 四页例 CELESTIAL/MALACHIN/ANGELIC/AGRIPPA 逐字, 无 detect）
+import "./core/marineFlags.js"; // 国际信号旗文本码（fancy, 双向, dCode 代旗槽名 k/l/m/n+SOS→SOk 例, 无 detect）
+// 取证补全组（取证一：SSDEEP 模糊哈希/LZNT1 解压/注释域提取，hash+forensic，多源对拍）
+import "./core/ssdeep.js"; // SSDEEP 模糊哈希（hash, 单向 run+compare, ssdeep 官方 fuzzy.c 逐行移植+C 库官方向量+Python 独立对拍 149 例, 无 detect）
+import "./core/lznt1.js"; // LZNT1 解压（forensic, 单向 run, 本机 Windows 26100 RtlCompressBuffer 真样本 11 例+wine/ReactOS 逐行移植+Python 对拍, 无 detect）
+import "./core/commentExtract.js"; // 注释域提取 htmlCommentExtract/zipCommentExtract（forensic, run, HTML Living Standard 13.2.4/13.2.5 分词语义+嵌套容错档; APPNOTE 6.3.x EOCD 档案注释+条目注释, 无 detect）
 import "./core/radix.js";
 import "./core/radixExt.js";
 import "./core/hash.js";
@@ -114,6 +154,7 @@ import "./core/trailerCarve.js"; // 文件附加数据剥离 + binwalk 式全文
 import "./core/foremostJs.js"; // 文件雕刻（Foremost 纯 JS 版）foremostCarve（forensic, run, 头尾魔数雕刻内嵌文件, 无 detect）
 import "./core/hashFrontier.js"; // 哈希前沿补遗（T398 批B）argon2/tiger/tiger2/kupyna（hash, run, 无 detect）
 import "./core/stegoText.js"; // 隐写文本检测组（零宽/同形字/规范化/空格/Bidi/字符透视，检测类 run 单向）
+import "./core/stegoDetect.js"; // 统一隐写检测 stegoDetect（data, run 单向, 11 个 mode：文本侧 8 + 文件侧 3，原 11 个纯检测 op 收敛入口）
 import "./core/textBlindWatermark.js"; // 文本盲水印 textBlindWatermark（stego, 双向+detect 分级, guofei v1 变长二进制+单双 U+200C, 与 zeroWidth 互不兼容）——T516 外部 F12 交付 M 接线
 import "./core/qrFormatBrute.js"; // QR 格式信息 32 组合爆破 qrFormatBrute（stego, qr 族 formatBrute 档, run 型报告）——T518 外部 F12 交付 M 接线
 import "./core/invisibles.js"; // 不可见字符可视化（零宽/控制符/BOM/空白 → 可见占位符 + scan/visualize/strip）
@@ -139,6 +180,7 @@ import "./core/cryptoTryAll.js"; // 密钥+密文一键尝试（枚举 AES/DES/3
 import "./core/webshell.js"; // webshell 流量解密预设（哥斯拉 PHP_XOR_BASE64 / 冰蝎 AES-ECB，固定 key 封装）
 import "./core/qrcode.js"; // 二维码/条码组（QR 生成/结构解析 + Aztec/DataMatrix 识别 + 条码判定）
 import "./core/qrdecode.js"; // QR 真解码组（矩阵→原文：finder/格式信息/之字形取数/掩码还原/RS 纠错/模式解码）
+import "./core/qrscan.js"; // 二维码扫描解析（图片→像素→模块矩阵 + 矩阵结构解析合并入口；解码仍走 qrdecode）
 import "./core/keyboardExt.js"; // 键盘/布局编码补全组（QWERTY↔Dvorak↔Colemak + T9 + 多击 + 行列坐标 + Steno + 方向键）
 import "./core/rsatool.js"; // 数论/RSA 攻击工具组（参数计算/小e/共模/Wiener/费马/Pollard/模逆/egcd/CRT/快速幂）
 import "./core/rsatoolExt.js"; // RSA 攻击扩展（dp/dq泄露/LSB Oracle/Bleichenbacher/Coppersmith/Boneh-Durfee）
@@ -156,6 +198,7 @@ import "./core/serial.js"; // 序列化格式识别组（protobuf/MessagePack/CB
 import "./core/timecodecExt.js"; // 时间戳扩展组（儒略日/Excel序列日期/Chrome时间/Twitter雪花ID）
 import "./core/hexview.js"; // hexview (hexdump/range/stats)
 import "./core/audiostego.js"; // 音频隐写识别组（WAV头解析/音频LSB提取/DTMF Goertzel/SSTV识别，run 单向分析类）
+import "./core/pcmTransforms.js"; // PCM 波形变换（audio, run, 声道差/差分/反相/倒放/阈值位流, 无 detect）
 import "./core/esolang2.js"; // esolang 扩展组
 import "./core/malbolgeExec.js"; // Malbolge 解释器 malbolgeExec（esolang, run 型: 执行/normalize/assemble, 步数护栏, 官方 7 样例对拍 17/17）——T519 外部 F11 交付 M 接线
 
@@ -167,13 +210,14 @@ import "./core/encodingExt3.js"; // T508 批二编码映射（crockford32/alienA
 import "./core/compressExt2.js"; // T508 批三压缩校验（rle/lzw/elias/verhoeff/lz4Dec/bzip2Dec，PIL/CLI/规范三源对拍，bzip2 全链）
 import "./core/fracmorse.js"; // 分数摩斯 Fractionated Morse
 import "./core/hamming.js"; // 海明码纠错编解码
-import { renderRecipe, rState as recipeState, addRecipeOpAt, addRecipeFamilyAt } from "./ui/recipeView.js"; // 配方链 UI
+import { renderRecipe, rState as recipeState, addRecipeOpAt, addRecipeFamilyAt, appendRecipeOpToTail, openRecipeFamilyAtTail } from "./ui/recipeView.js"; // 配方链 UI
 import { renderExhaustive } from "./ui/exhaustiveView.js"; // 穷举全解视图（一键全解码器穷举）
 import { renderUniversalViewer, disposeUniversalViewer } from "./ui/universalViewer.js"; // 字符显示器（Hex/Unicode逐字符/不可见字符）
 import { renderCodeImageViewer } from "./ui/codeImageViewer.js"; // 编码图鉴查询器（图形编码对照图）
 import { renderQuickConv } from "./ui/quickConv.js"; // 快速换算（程序员进制联动 + 分类单位换算，MT81）
 import { exhaustiveDecode } from "./core/exhaustiveDecode.js"; // 穷举全解并入首页智能解码（末尾追加可折叠区）
-import { expandableInput, ensureExpStyles, openExpandModal } from "./ui/expandableInput.js"; // 密钥/IV/crib 可展开输入框 + 弹层样式注入
+import { expandableInput, ensureExpStyles, openExpandModal } from "./ui/expandableInput.js";
+import { attachModalLifecycle } from "./ui/modalLifecycle.js"; // 密钥/IV/crib 可展开输入框 + 弹层样式注入
 import "./core/snow.js"; // Snow 行尾空白隐写（Space/Tab 编码比特）
 import "./core/bazeries.js"; // Bazeries 密码（5×5 方阵+数字key分组反转）
 import "./core/fenham.js"; // Fenham 密码（ASCII 二进制逐位 XOR）
@@ -212,6 +256,7 @@ import "./core/spoon.js"; // Spoon 语言（BF 前缀码变体, fancy）
 import "./core/ssti.js"; // SSTI 关键字识别（analysis, run 型, 只识别不执行）
 import "./core/pinyin.js"; // 数字转拼音 + 汉字转拼音（cn）
 import "./core/goldbug.js"; // Goldbug 金甲虫密码（classic, 有 detect, 须在 detectSupplement 前）
+import "./core/trafficReadable.js"; // 流量可读结论 trafficReadable（forensic, run, 一键出人话报告+键鼠真彩图, 无 detect；注册序须在 usbHid 前 → usb 族滑块第一档「智能报告」）
 import "./core/usbHid.js"; // USB HID 流量解析（键盘/鼠标 leftover capture data, run 型 analysis）
 import "./core/exeTools.js"; // 外部 exe 工具接入(bftools/npiet/stegdetect)+GUI直启(watermarkH/JPHS/NTFS流/OpenPuff/OurSecret)，带 requiresBridge 徽章
 // 以下模块已注册 op 且有 detect 的须排在下方 detectExt3/detectSupplement 之前，避免 detect 覆盖顺序错乱。
@@ -232,6 +277,7 @@ import "./core/xwing.js"; // X-Wing 混合 KEM（asym，T398 批A）
 import "./core/stegdetect.js"; // stegdetect JPEG 隐写检测（analysis，T391）
 import "./core/jsteg.js"; // jsteg JPEG 系数隐写（stego，T390）
 import "./core/dtmfWav.js"; // DTMF 拨号音 WAV 编/解（stego；此前仅经 audioAnalysis 间接注册，Node/Worker 闭包缺项）
+import "./core/morseWav.js"; // 摩斯音频解码 morseWav（audio, decode, WAV→包络→Otsu 自适应阈值→点划分类→明文, 无 detect）
 import "./core/xmssLms.js"; // XMSS/LMS 哈希签名（asym，T398 批A）
 import "./core/hqc.js"; // HQC 后量子 KEM（asym，T398 批A）
 import "./core/ntruReal.js"; // 真 NTRU（asym，T398 批A）
@@ -262,11 +308,23 @@ import "./core/john_ssh.js"; // sshkey2john 哈希提取（analysis, run, 无 de
 import "./core/pcapParse.js"; // pcapParse 流量解析（analysis, run, 无 detect）
 import "./core/cryptoGap.js"; // 密码学缺口 rc2/lmHash/evpBytesToKey（modern+hash, 无 detect）
 import "./core/blindWatermark.js"; // 盲水印 dctWatermarkEmbed/Extract（stego, 无 detect）
+import "./core/blindWatermarkDualFft.js"; // 双图盲水印(频域) dualFftWatermark（stegoFile, 双向, 无 detect）
+import "./core/outguess.js";
+import "./core/steghide.js"; // steghide 0.5.1 隐写双向 steghide（stegoFile, 双向, WASM 引擎, 无 detect）
+import "./core/gifshuffle.js"; // GifShuffle 调色板排列隐写 gifshuffle（stegoFile, 双向, 纯JS, 无 detect） // OutGuess 0.4 隐写双向 outguess（stegoFile, 双向, WASM 引擎, 无 detect）
+import "./core/watermarkhFft.js"; // WaterMarkH 频域隐形水印 watermarkhFft（stegoFile, 双向, 无 detect）
+import "./core/blindWatermarkDwtSvd.js"; // 双图盲水印(F) DWT-DCT-SVD dwtSvdWatermark（stegoFile, 双向, 无 detect）
+import "./core/astroSymbols.js"; // 天文/黄道符号 astroSymbols（fancy, 双向, 无 detect）
+import "./core/pipNumerals.js"; // 点数记数 pipNumerals（radix, 双向, 无 detect）
 import "./core/bkcrack.js"; // ZipCrypto已知明文攻击 bkcrackAttack（analysis, run, wasm懒加载降级, 无 detect）
 import "./core/pcapDeep.js"; // 流量深度分析 pcapTcpReassemble/pcapHttpExtract/pcapDnsTunnel/pcapIcmpPayload（analysis, run, 无 detect）
+import "./core/ftpExtract.js"; // FTP 控制/数据流配对对象提取 ftpExtract（forensic, run, acceptsBytes, 无 detect）
+import "./core/tlsDecrypt.js"; // TLS1.2 已知密钥还原 tlsDecrypt（forensic, run, acceptsBytes, 无 detect）
+import "./core/wpaDecrypt.js"; // WPA2 握手校验/CCMP 解密 wpaDecrypt（forensic, run, acceptsBytes, 无 detect）
 import "./core/dlp.js"; // 离散对数求解 dlp（modern, run, BSGS+Pollard rho, 无 detect）
 import "./core/primeGen.js"; // 大素数生成 primeGen（radix, run, Miller-Rabin, 无 detect）
 import "./core/bigmath.js"; // BigInt 大数计算器 bigCalc（radix, run, 四则/数论/素性/分解, 无 detect）
+import "./core/primeInspector.js"; // 素数判定与筛选 primeInspector（radix, run, 梅森LL/孪生/热尔曼/安全/费马/强素数/p±1光滑, 无 detect）
 import "./core/randomSeed.js"; // 随机种子生成 randomSeed（radix, run, crypto CSPRNG, 无 detect）
 import "./core/dictGen.js"; // 字典生成 dictGen（analysis, run, 笛卡尔积/掩码, 无 detect）
 import "./core/elgamal.js"; // ElGamal 公钥加密 elgamal（modern, 双向, HAC §8.4, 无 detect）
@@ -289,6 +347,8 @@ import "./core/mcSave.js"; // Minecraft 存档分析地基 mcLevelDat（analysis
 import "./core/mcText.js"; // Minecraft 文本情报提取 mcTextExtract（analysis, run, Anvil MCA + 复用 mcSave NBT 解析器, 抽告示牌/书/命令/CustomName/物品名, flag 高亮, 无 detect）
 import "./core/mcMap.js"; // Minecraft 地图物品渲染 mcMapRender（analysis, run, map_#.dat gzip NBT → data.colors 128×128 → MC 调色板 → 手写 PNG dataURL, 无 detect）
 import "./core/bin2img.js"; // 二进制转图片 bin2img（stego, run, 0/1 位流 → 黑白点阵 PNG dataURL, 复用 mcMap encodePNG, 无 detect）
+import "./core/dataToImage.js"; // 数值数据渲染成图 dataToImage（image, run, RGB列表/坐标点集/标量网格/位流 → PNG, 复用 mcMap encodePNG, 无 detect）
+import "./core/huffman.js"; // 通用哈夫曼码表/频率编解码 huffmanCodec（data, 双向, canonical 确定性, 无 detect）
 import "./core/imgFft.js"; // 图像 2D FFT 幅度谱 imgFft（stego, run, acceptsBytes, PNG/BMP → 灰度 → 行列 FFT → log 幅度谱 fftshift → PNG dataURL, 复用 lsbExtract/mcMap, 无 detect）
 import "./core/mcNbt.js"; // Minecraft 通用 NBT 树查看器 mcNbtView（analysis, run, 复用 mcSave 解析器 + pcapParse inputToBytes, 折叠树/路径过滤/BigInt 不丢精度, 无 detect）
 import "./core/formatSniff.js"; // 格式嗅探 formatSniff（analysis, run, 剪贴板内容识别：JWT/URL/PEM/hash/base系/Python/时间戳/坐标/助记词/ETH/BTC 特征识别, 无 detect）
@@ -393,8 +453,22 @@ import "./core/peInfo.js"; // PE 可执行信息 peInfo（forensic, run, COFF+�
 import "./core/lsbEmbed.js"; // LSB 嵌入（出题）lsbEmbed（stego, run, 封面像素低位写载荷→PNG, 无 detect）
 import "./core/zipCreate.js"; // ZIP 创建（出题）zipCreate（forensic, run, 单文件 Stored/Deflated ZIP 生成, 无 detect）
 import "./core/deepsoundExtract.js"; // DeepSound 提取 deepsoundExtract（forensic, run async, WAV 采样低位 DSC2/DSCF, 无 detect）
+import "./core/beaufortVariant.js"; // 变体 Beaufort 参数档 beaufortVariant（classic, 双向, dCode 算例, 无 detect）
+import "./core/redefence.js"; // Redefence 重栅栏参数档 redefence（classic, 双向, CrypTool/dCode 算例, 无 detect）
+import "./core/objectIdTime.js"; // ObjectID 时间戳解析 objectIdTime（radix, run, MongoDB 官方向量, 无 detect）
+import "./core/rc4Drop.js"; // RC4-drop / CipherSaber-2 rc4Drop（stream, 双向, RFC 6229 + cstest.cs2 向量, 无 detect）
+import "./core/xsalsa20.js"; // XSalsa20 xsalsa20（stream, 双向, libsodium stream3/core3/core4 向量, 无 detect）
 import "./core/detectExt3.js"; // EASY 30 op detect 补齐（须在所有 op 注册后）
 import "./core/detectSupplement.js"; // 编码类 detect 覆盖补齐（须在所有 op 注册后）
+import { decodeUtf8Lossless } from "./core/bytesIo.js";
+
+// BOM 保真的严格 UTF-8 解码（bytesIo 单一源）：非法序列抛 TypeError（同旧 fatal TextDecoder 语义），
+// 唯一行为差异是合法 BOM（U+FEFF 开头）不再被静默吞掉。
+function _decodeUtf8Fatal(bytes) {
+  const r = decodeUtf8Lossless(bytes);
+  if (!r.ok) throw new TypeError(r.reason);
+  return r.text;
+}
 
 // ---------- 启动加载屏（避免白屏，最早显示，纯文字+CSS 不依赖字库/图标）----
 // 模块 import 已同步完成到此，立即盖屏 → 启动尾部渐隐。
@@ -486,31 +560,44 @@ function ioArea(attrs = {}) {
     configurable: true,
   });
   if (!ro) {
- // 粘贴净化：只取纯文本，杜绝富文本/HTML 注入
+ // 粘贴净化：只取纯文本，杜绝富文本/HTML 注入。
+ // 不用 execCommand("insertText")：Chromium 会吞 \n（多行矩阵被拍平成单行）且返回 true，
+ // 兜底分支永不触发。改为 Range 直插文本节点（.io-area 为 pre-wrap，\n 语义正确），
+ // 并手动补发 input 事件（程序化 DOM 变更不触发原生 input，上层状态同步依赖它）。
     div.addEventListener("paste", (e) => {
       e.preventDefault();
       const cd = e.clipboardData || window.clipboardData;
       const text = cd ? cd.getData("text/plain") : "";
-      if (!document.execCommand || !document.execCommand("insertText", false, text)) {
+      if (!text) return;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const node = document.createTextNode(text);
+        range.insertNode(node);
+        range.setStartAfter(node); range.collapse(true);
+        sel.removeAllRanges(); sel.addRange(range);
+      } else {
+        div.textContent = div.textContent + text;
+      }
+      div.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    });
+ // Enter → 纯 "\n"（不让浏览器插入 <div>/<br>，保证 textContent 换行语义正确）。
+ // Ctrl/Meta+Enter 放行给上层的 convert 快捷键；Shift+Enter 也走纯换行。
+ // 同粘贴：execCommand("insertText", "\n") 在 Chromium 吞换行 → Range 直插 + 补发 input。
+    div.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
         const sel = window.getSelection();
         if (sel && sel.rangeCount) {
           const range = sel.getRangeAt(0);
           range.deleteContents();
-          const node = document.createTextNode(text);
+          const node = document.createTextNode("\n");
           range.insertNode(node);
           range.setStartAfter(node); range.collapse(true);
           sel.removeAllRanges(); sel.addRange(range);
-        } else {
-          div.textContent = div.textContent + text;
+          div.dispatchEvent(new InputEvent("input", { bubbles: true }));
         }
-      }
-    });
- // Enter → 纯 "\n"（不让浏览器插入 <div>/<br>，保证 textContent 换行语义正确）。
- // Ctrl/Meta+Enter 放行给上层的 convert 快捷键；Shift+Enter 也走纯换行。
-    div.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) {
-        e.preventDefault();
-        document.execCommand && document.execCommand("insertText", false, "\n");
       }
     });
  // 保险：内容删空后清掉浏览器残留的 <br>，让 :empty placeholder 重新生效
@@ -567,6 +654,55 @@ function toast(msg) {
   document.body.append(t);
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => t.remove(), 2000);
+}
+
+// Bounded click arbitration, not the OS double-click setting (unavailable on the Web).
+const RECIPE_CLICK_WAIT_MS = 600;
+const recipeClickTimers = new WeakMap();
+function isRecipeRoute() {
+  return location.hash === "#/recipe" || location.hash.startsWith("#/recipe?");
+}
+function recipeAwareClick(event, navigate) {
+  if (event.ctrlKey || event.metaKey || event.button === 1) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!isRecipeRoute()) { navigate(); return; }
+  const target = event.currentTarget;
+  cancelRecipeSingleClick(event);
+  // Keyboard / assistive activation has no pointer double-click to arbitrate.
+  if (event.detail === 0) { navigate(); return; }
+  const route = location.hash;
+  recipeClickTimers.set(target, setTimeout(() => {
+    recipeClickTimers.delete(target);
+    // A closed search result or a departed recipe must not navigate later.
+    if (target.isConnected && location.hash === route && isRecipeRoute()) navigate();
+  }, RECIPE_CLICK_WAIT_MS));
+}
+function cancelRecipeSingleClick(event) {
+  const target = event.currentTarget;
+  clearTimeout(recipeClickTimers.get(target));
+  recipeClickTimers.delete(target);
+}
+function recipeOpDoubleClick(event, opId) {
+  if (!isRecipeRoute() || event.ctrlKey || event.metaKey || event.button === 1) return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelRecipeSingleClick(event);
+  const result = appendRecipeOpToTail(opId);
+  if (!result.ok) {
+    const zh = String(getLocale()).toLowerCase().startsWith("zh");
+    toast(result.reason === "requiresBridge"
+      ? (zh ? "外部程序不能加入配方链" : "External tools cannot be added to a recipe")
+      : (zh ? "无法加入配方链" : "Could not add operation to recipe"));
+  }
+}
+function recipeFamilyDoubleClick(event, familyId) {
+  if (!isRecipeRoute() || event.ctrlKey || event.metaKey || event.button === 1) return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelRecipeSingleClick(event);
+  const rect = event.currentTarget.getBoundingClientRect();
+  openRecipeFamilyAtTail(familyId, rect.right, rect.top);
 }
 
 // ============ 左侧导航渲染 ============
@@ -695,10 +831,8 @@ function renderNav() {
               draggable: "true",
                title: bestNote,
                oncontextmenu: e => showFavoriteMenu(e, { entries: grp.ops.map(m => ({ opId: m.id, label: opName(m) })) }),
-              onclick: (e) => {
-                if (e.ctrlKey || e.metaKey || e.button === 1) return;
-                e.preventDefault(); e.stopPropagation(); selectOp(first.id);
-              },
+              onclick: (e) => recipeAwareClick(e, () => selectOp(first.id)),
+              ondblclick: (e) => recipeFamilyDoubleClick(e, grp.family),
               ondragstart: (e) => {
                 if (!e.dataTransfer) return;
                 e.dataTransfer.effectAllowed = "copy";
@@ -728,10 +862,8 @@ function renderNav() {
             draggable: "true",   // 可拖到配方链画布追加/插入节点（不在画布 drop 则无副作用）
              title: meta ? meta.note : "",
              oncontextmenu: e => showFavoriteMenu(e, { opId: op.id }),
-            onclick: (e) => {
-              if (e.ctrlKey || e.metaKey || e.button === 1) return; // 放行新标签打开
-              e.preventDefault(); e.stopPropagation(); selectOp(op.id);
-            },
+            onclick: (e) => recipeAwareClick(e, () => selectOp(op.id)),
+            ondblclick: (e) => recipeOpDoubleClick(e, op.id),
             ondragstart: (e) => {
  // 自定义 MIME 承载 opId，供 recipeView 画布识别；同带 text/plain 兜底不破坏原生行为
               if (!e.dataTransfer) return;
@@ -809,10 +941,8 @@ function renderFavNav() {
     for (const op of ops) {
       sub.append(el("a", {
         class: "nav-subitem" + (state.opId === op.id ? " on" : ""), href: "#/op/" + op.id,
-        onclick: event => {
-          if (event.ctrlKey || event.metaKey || event.button === 1) return;
-          event.preventDefault(); event.stopPropagation(); selectOp(op.id);
-        },
+        onclick: event => recipeAwareClick(event, () => selectOp(op.id)),
+        ondblclick: event => recipeOpDoubleClick(event, op.id),
         oncontextmenu: event => {
           event.preventDefault(); event.stopPropagation();
           openFavMenu(event.clientX, event.clientY, { opId: op.id, onChange: favoritesChanged });
@@ -845,7 +975,7 @@ function onNavClick(cat, itemEl) {
  // 展开态：点已展开的分类头 → 收起；否则展开。支持多个分类同时展开（非手风琴）。
   const collapsing = state.expandedCats.includes(cat.id);
   // T471b：减动效改由应用内开关（html.reduce-motion 类）驱动，不再读 OS 偏好——
-  // 部分 Windows 关闭「动画效果」会导致用户永远看不到动画（实机确诊，2026-09-09 恒烈指示）
+  // 部分 Windows 关闭「动画效果」会导致用户永远看不到动画（实机确诊，2026-09-09 产品裁决）
   const noMotion = document.documentElement.classList.contains("reduce-motion");
   const springOn = !noMotion && document.documentElement.classList.contains("spring-motion");
   const sub = itemEl && itemEl.nextElementSibling;
@@ -929,7 +1059,7 @@ function selectOp(id) {
 let _routing = false;
 // 授权信息（启动异步 loadLicense 填入；未读到前按开源自编译默认显示）。
 let _license = OPENSOURCE_LICENSE;
-// 授权自定义软件名（2026-09-13 恒烈新需求）：license payload.appName（签名保护）优先，
+// 授权自定义软件名（2026-09-13 产品负责人新需求）：license payload.appName（签名保护）优先，
 // 未声明回退 i18n 内置名。消费者：顶栏品牌/页面标题/关于页应用名。
 function appDisplayName() {
   return (_license && _license.verified && _license.appName) || null;
@@ -1025,10 +1155,21 @@ window.addEventListener("hashchange", () => {
 });
 
 // ============ 工作区渲染 ============
+// 上次渲染的 view/opId——用于「真实视图切换才取消」的判定（见 renderWorkspaceInner 内）。
+let _wsView = null, _wsOpId = null;
 function renderWorkspaceInner() {
   // 离开字符显示器视图：释放 _rerender 闭包对旧视图 DOM 的引用（性能审计 H3，
   // hex 满载可达 13.9 万节点，不释放则逛其他视图的整段时间不可回收）
   if (state.view !== "inspect") disposeUniversalViewer();
+ // 真实视图切换（含 op→op）即取消在途重运算——此前取消仅运行卡按钮一处调用点，
+ // 切页后结果无处落地但 Worker 继续满载至自然结束（Worker 池常驻复用，terminate 后惰性
+ // 重建，无破坏性）。仅在 view/opId 变化时取消：视图内重渲染（edu 懒加载/语言切换等
+ // 同 view 重渲）不触发，避免误杀。
+  if (state.view !== _wsView || state.opId !== _wsOpId) {
+    if (opRunBusy()) cancelOpRun();
+    _wsView = state.view;
+    _wsOpId = state.opId;
+  }
   $ws.innerHTML = "";
   if (state.view === "home") return renderHome();
   if (state.view === "recipe") return renderRecipe($ws);
@@ -1041,7 +1182,7 @@ function renderWorkspaceInner() {
   return renderOp();
 }
 
-// T510③ 切页过渡（恒烈 2026-09-13 二批反馈定稿：「不要弹动感，要从无到有的平滑过渡，动画要快，
+// T510③ 切页过渡（产品负责人 2026-09-13 二批反馈定稿：「不要弹动感，要从无到有的平滑过渡，动画要快，
 // 页面类的不要弹动」）：新内容渲染完成后容器纯淡入 150ms 无弹档——不加任何位移，杜绝弹跳感。
 // 同帧 set+to，初隐被重建内容遮住。仅 spring-motion 开时播；首屏不播；reduce-motion 下直切。
 let _wsMotionSeen = false;
@@ -1135,15 +1276,7 @@ function renderHome() {
   );
 
  // Magic 工具栏：crib 目标特征 + intensive 深度爆破开关
-  const cribInput = el("input", {
-    type: "text", class: "magic-crib",
-    placeholder: t("ui.home.cribPlaceholder"),
-    spellcheck: "false",
-  });
- // 目标特征默认填充常见 CTF 特征（软加权：命中置顶高亮，不删其他候选，见 magic.js）。
- // 首次进入给默认；用户清空后尊重空值（用 undefined 区分「没设过」和「主动清空」）。
-  if (state.homeCrib === undefined) state.homeCrib = DEFAULT_CRIB;
-  cribInput.value = state.homeCrib;                 // 恢复上次 crib
+  const targetEditor = createTargetEditor();
  // 密钥框（需求3）：填了 key → 一键解码把 AES/DES/RC4/XOR/vigenere 等带密钥加解密 op
  // 也纳入尝试，用 CTF 常考默认参数（IV=0、常见模式/编码组合）一起跑。空则不试 keyed。
   const keyInput = el("input", {
@@ -1186,7 +1319,7 @@ function renderHome() {
   const toolbar = el("div", { class: "magic-toolbar" },
  // 第一行：目标特征
     el("div", { class: "magic-row" },
-      el("label", { class: "magic-crib-label" }, t("ui.home.cribLabel"), cribInput),
+      targetEditor.element,
     ),
  // 第二行：密钥
     el("div", { class: "magic-row" },
@@ -1210,12 +1343,19 @@ function renderHome() {
   const topBanner = el("div", { class: "onekey-topbanner" });
 
  // 解码只由「点按钮」触发（force=true，绕过长度上限）。
- // 逐字输入不再自动解码——magicDecode + exhaustiveDecode 每次击键同步跑会逐字卡顿（恒烈反馈）。
+ // 逐字输入不再自动解码——magicDecode + exhaustiveDecode 每次击键同步跑会逐字卡顿（产品裁决）。
  // 打字/改 crib/切开关只存 state，不解码；要出结果点「一键解码」按钮。
  // 文本解码取 .text 档（拖入文件的路径另取 .file 档，见 drop 处理）。
-  const forceTrigger = () => runOneKey(input.value, outWrap, cribInput.value.trim(), state.homeStrength, true, topBanner, keyInput.value.trim(), runBtn);
-  input.addEventListener("input", () => { state.homeInput = input.value; });
-  cribInput.addEventListener("input", () => { state.homeCrib = cribInput.value; });
+  const forceTrigger = () => runOneKey(input.value, outWrap, "", state.homeStrength, true, topBanner, keyInput.value.trim(), runBtn, targetEditor.getTargets());
+  input.addEventListener("input", () => {
+    state.homeInput = input.value;
+   // 拖入文件的分析报告（fileReport）只属于那次拖入：一旦手写/编辑文本（新意图），
+   // 文件结果立即清除——否则后续文本解码时文件卡片仍挂在 outWrap 上方，
+   // 且清空工具条只清输入框，文件结果没有任何入口可清（产品负责人 09-25 报告的残留 bug）。
+   // 横幅同理（上一轮的超长提示与本次输入无关）。
+    fileReport.innerHTML = "";
+    if (topBanner) topBanner.innerHTML = "";
+  });
   keyInput.addEventListener("input", () => { state.homeKey = keyInput.value; });
  // 一键解码按钮 = 唯一解码入口。有输入才跑，空则聚焦回输入框。
   runBtn.addEventListener("click", () => { if (input.value.trim()) forceTrigger(); else input.focus(); });
@@ -1261,7 +1401,16 @@ function renderHome() {
  // 首页一把梭输入框接通用编辑框工具条（粘贴/清空/复制/全选/导出/字号 + Ctrl+A/S）。
  // onChange 只存 state 不自动解码——解码统一由「一键解码」按钮触发（与逐字输入一致，不卡）。
   const homeToolbar = attachEditorToolbar(input, {
-    onChange: () => { state.homeInput = input.value; },
+    onChange: () => {
+      state.homeInput = input.value;
+     // 工具条「清空」= 完整清场：输入 + 文件分析报告 + 解码卡片 + 横幅全部归零，
+     // 不再只清输入框（文件结果/解码卡片残留且无法清理的另一半根因）。
+      if (!input.value.trim()) {
+        fileReport.innerHTML = "";
+        outWrap.innerHTML = "";
+        if (topBanner) topBanner.innerHTML = "";
+      }
+    },
     exportName: "onekey-input.txt",
   });
 
@@ -1281,7 +1430,7 @@ function activeCustomImplIds() {
 
 // strengthCfg = { level, customIds }（来自「解码强度」弹窗）。resolveDecodeConfig 解析成
 // allowOps 白名单 + 层数/暴力/参数网格/时间预算，替代原先的 intensive/multiLayer 两个布尔。
-async function runOneKey(text, outWrap, crib, strengthCfg, force = false, topBanner = null, key = "", runBtn = null) {
+async function runOneKey(text, outWrap, crib, strengthCfg, force = false, topBanner = null, key = "", runBtn = null, targets = loadTargetConfig().targets) {
   magicFilterReset(outWrap);
   outWrap.__rf_magic = null;
   outWrap.__rf_brute = null;
@@ -1314,7 +1463,7 @@ async function runOneKey(text, outWrap, crib, strengthCfg, force = false, topBan
   );
   const softMs = resolved.magic.softDeadlineMs || SOFT_DEADLINE_MS;
 
- // 看门狗倒计时（恒烈需求）：一键解码按钮左边显示读秒，软死线到点先渲染已得结果、
+ // 看门狗倒计时（产品裁决）：一键解码按钮左边显示读秒，软死线到点先渲染已得结果、
  // 后台继续；出最终结果 / 被新输入接管则清除。runBtn 由 renderHome 传入（可空，如拖文件路径）。
   let countdownTimer = null;
   const clearCountdown = () => {
@@ -1346,7 +1495,7 @@ async function runOneKey(text, outWrap, crib, strengthCfg, force = false, topBan
  // key（工具栏密钥框）→ 带密钥加解密 op（AES/DES/RC4/XOR/vigenere… + CTF 默认参数）参与。
  // onPartial：软死线（5s）到点先渲染已得结果，Worker 后台继续，最终结果到再整体重渲染。
  // allowOps=null（最强档）表示不限制，等同旧行为。resolved 已在上方（倒计时要用软死线）解析。
-  const opts = { ...resolved.magic };
+  const opts = { ...resolved.magic, targets };
   if (resolved.allowOps) opts.allowOps = Array.from(resolved.allowOps);  // Worker 需可结构化克隆
   opts.softDeadlineMs = softMs;
   if (crib) opts.crib = crib;
@@ -1387,10 +1536,8 @@ async function runOneKey(text, outWrap, crib, strengthCfg, force = false, topBan
       if (!bop || typeof bop.run !== "function") continue;
       if (token !== runOneKey._token) return;  // 被新输入接管，弃未跑完的爆破
       try {
-        const r = await Promise.race([
-          Promise.resolve().then(() => bop.run(q, {})),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 30000)),
-        ]);
+        // 重爆破走独立线程：主线程零阻塞；超时到点真 terminate，不再「弃结果但跑到底」。
+        const r = await runOpOffThread(bop.id, q, {}, { timeoutMs: 30000 });
         results.push({ id: bop.id, name: bop.name || bop.id, output: String(r), timedOut: false });
       } catch (e) {
         results.push({ id: bop.id, name: bop.name || bop.id, output: String((e && e.message) || e), timedOut: String(e) === "Error: timeout" });
@@ -1449,8 +1596,7 @@ function renderOneKeySnapshot(outWrap) {
   appendRawCard(outWrap, q);
 
   // Leet 假命中标记与原排序规则保持不变；筛选只取保序子集。
-  let cribRe = null;
-  if (crib) { try { cribRe = new RegExp(crib, "i"); } catch { cribRe = null; } }
+  const cribRe = literalMatcher(crib);
   const rawMatchesCrib = cribRe ? cribRe.test(q) : false;
   for (const c of cands) {
     c._leetFalseHit = !!(cribRe && c.matchesCrib && rawMatchesCrib && c.chain.includes("leetSpeak"));
@@ -1474,13 +1620,13 @@ function renderOneKeySnapshot(outWrap) {
 
   // 摘要也来自筛选后的保序子集；不匹配时不展示全量候选的摘要。
   if (shown.length && shown[0].chain.length > 0) {
-    outWrap.append(renderSummaryCard(shown[0]));
+    outWrap.append(renderSummaryCard(shown[0], resultSearchState(outWrap)));
   }
 
   const groups = groupSweepCands(shown);
   for (const g of groups) {
-    if (g.items.length >= 2) outWrap.append(renderBruteGroupCard(g));
-    else outWrap.append(renderCandCard(g.items[0]));
+    if (g.items.length >= 2) outWrap.append(renderBruteGroupCard(g, resultSearchState(outWrap)));
+    else outWrap.append(renderCandCard(g.items[0], resultSearchState(outWrap)));
   }
   appendBruteResults(outWrap, shownBrute);
 }
@@ -1489,39 +1635,18 @@ function renderOneKeySnapshot(outWrap) {
 // `caesar(shift=3)`（见 exhaustiveDecode.formatParamTag）——同一 baseOpId 的多条分支归一组。
 // 普通候选（op id 无括号 / 多层链 / 合成 xor:K,rot:R）各自独立成组（items 长度 1），保持原样。
 // 分组保序：以每个 base 首次出现位置为组序，组内保 magic 综合分原顺序（最优在前）。
-function groupSweepCands(cands) {
-  const order = [];
-  const byBase = new Map();
-  for (const c of cands) {
- // 仅单层链且形如 base(params) 的才算爆破分支；其余用唯一键各自独立成组
-    const single = c.chain.length === 1 ? c.chain[0] : null;
-    const m = single && /^([^()]+)\((.*)\)$/.exec(single);
- // xor:K / rot:R 暴力候选（恒烈需求2）：单层合成链，255 个 key + 7 个 rot 全归一张
- // 「暴力尝试」卡，不再各占一行刷屏。base 记 "xor"/"rot"（去掉冒号后数字）→ 同前缀归一组。
-    const brute = single && /^(xor|rot):/.test(single) ? single.split(":")[0] : null;
-    let groupKey, base;
-    if (m) { groupKey = "sweep:" + m[1]; base = m[1]; }
-    else if (brute) { groupKey = "brute:" + brute; base = brute; }
-    else { groupKey = "solo:" + (order.length + "|" + (single || c.chain.join(">"))); base = null; }
-    if (!byBase.has(groupKey)) {
-      const g = { base, items: [] };
-      byBase.set(groupKey, g);
-      order.push(g);
-    }
-    byBase.get(groupKey).items.push(c);
-  }
-  return order;
-}
+function groupSweepCands(cands) { return groupSingleCandidates(cands); }
 
 // 三元组摘要行——置顶展示 magic 最优候选。
 // 格式：[解码N次] 明文（截断） + 混合解码结果: op1 › op2 › op3。
 // 复用 onekey-card 样式，点击复制明文。crib 命中则高亮。
-function renderSummaryCard(c) {
+function renderSummaryCard(c, search = {}) {
   const chainLabel = c.chain
     .map((id) => { const o = getOp(id); return o ? opNameBi(o) : id; })
     .join(" › ");
   const isLong = c.result.length > 500;
   const valEl = el("div", { class: "ok-val" }, isLong ? c.result.slice(0, 500) + " …" : c.result);
+  highlightResult(valEl, c.result, c.signals, typeof search === "undefined" ? {} : search);
   const card = el("div",
     { class: "onekey-card onekey-summary" + (c._cribHit ? " crib-hit" : ""),
       title: t("ui.common.clickCopy"),
@@ -1549,13 +1674,14 @@ function renderSummaryCard(c) {
 }
 
 // 单条候选卡（原 for 循环体抽出，行为不变）。
-function renderCandCard(c) {
+function renderCandCard(c, search = {}) {
   const chainLabel = c.chain
     .map((id) => { const o = getOp(id); return o ? opNameBi(o) : id; })
     .join(" › ");
   const cribTag = c._cribHit ? " ●" : "";
   const isLong = c.result.length > 500;
   const valEl = el("div", { class: "ok-val" }, isLong ? c.result.slice(0, 500) + " …" : c.result);
+  highlightResult(valEl, c.result, c.signals, typeof search === "undefined" ? {} : search);
   const card = el("div",
     { class: "onekey-card" + (c._cribHit ? " crib-hit" : ""),
       title: t("ui.common.clickCopy"),
@@ -1579,55 +1705,11 @@ function renderCandCard(c) {
 
 // 爆破分组卡——同算法多参数分支收进一张 <details>。头显示算法名 + 分支数 + 最优分支
 // 展开见其余分支。任一分支 crib 命中则整卡高亮。每条分支点击复制自己的结果。
-function renderBruteGroupCard(g) {
- // xor/rot 暴力组用专属标签（不走 getOp——"xor" 会显示成普通「异或」op，语义是单字节爆破）。
-  const BRUTE_LABEL = { xor: "XOR 单字节爆破", rot: "位循环移位爆破" };
-  const op = g.base && !BRUTE_LABEL[g.base] ? getOp(g.base) : null;
-  const baseName = BRUTE_LABEL[g.base] || (op ? opNameBi(op) : (g.base || ""));
-  const anyCrib = g.items.some((c) => c._cribHit);
-  const best = g.items[0]; // magic 综合分已排序，首条为最优
-
-  const box = el("details", { class: "onekey-card onekey-brute" + (anyCrib ? " crib-hit" : ""), open: anyCrib ? "" : null });
- // 分支参数标签：从 base(params) 里取括号内内容
-  const paramOf = (c) => {
-    const s = c.chain[0] || "";
-    const m = /^[^()]+\((.*)\)$/.exec(s);
-    if (m) return m[1];
-    const b = /^(xor|rot):(.+)$/.exec(s);   // xor:66 / rot:3 暴力候选：显示 key/位数
-    if (b) return b[1] + "=" + b[2];
-    return "";
-  };
-  const summary = el("summary", { class: "ok-name onekey-brute-head" },
-    el("span", {}, t("ui.home.bruteGroup", baseName, g.items.length)),
-    el("span", { class: "onekey-brute-best" },
-      `${t("ui.home.bruteBest")}: ${paramOf(best)}　·　${t("ui.home.confidence")} ${(best.confidence * 100).toFixed(0)}%${best._cribHit ? " ●" : ""}`),
-  );
-  box.append(summary);
-
-  for (const c of g.items) {
-    const isLong = c.result.length > 500;
-    const valEl = el("div", { class: "ok-val" }, isLong ? c.result.slice(0, 500) + " …" : c.result);
-    const branch = el("div",
-      { class: "onekey-brute-branch" + (c._cribHit ? " crib-hit" : ""),
-        title: t("ui.common.clickCopy"),
-        onclick: (ev) => { ev.stopPropagation(); navigator.clipboard?.writeText(c.result); toast(t("ui.toast.copiedResult")); } },
-      el("div", { class: "onekey-brute-param" },
-        `${paramOf(c)}　·　${(c.confidence * 100).toFixed(0)}%${c._cribHit ? " ●" : ""}`),
-      valEl,
-    );
-    if (isLong) {
-      const expandBtn = el("span", { class: "ok-expand" }, t("ui.common.expand", c.result.length));
-      let expanded = false;
-      expandBtn.addEventListener("click", (ev) => {
-        ev.stopPropagation();
-        expanded = !expanded;
-        if (expanded) { valEl.textContent = c.result; expandBtn.textContent = t("ui.common.collapse"); }
-        else { valEl.textContent = c.result.slice(0, 500) + " …"; expandBtn.textContent = t("ui.common.expand", c.result.length); }
-      });
-      branch.append(expandBtn);
-    }
-    box.append(branch);
-  }
+function renderBruteGroupCard(g, search = {}) {
+  const op = getOp(g.base);
+  const box = el("details", { class: "onekey-card onekey-brute", open: "" });
+  box.append(el("summary", { class: "ok-name" }, t("ui.home.bruteGroup", op ? opNameBi(op) : g.base, g.items.length)));
+  for (const c of g.items) box.append(renderCandidateRow(c, { search, copied: () => toast(t("ui.toast.copiedResult")) }));
   return box;
 }
 
@@ -1698,7 +1780,7 @@ async function appendExhaustSection(outWrap, q, crib, token) {
 
   let r;
   const _exIds = activeCustomImplIds();
-  try { r = await exhaustiveDecode(q, { crib: crib || undefined, onlyChanged: true, onProgress, ...(_exIds.length ? { excludeOps: _exIds } : {}) }); }
+  try { r = await exhaustiveDecode(q, { targets: loadTargetConfig().targets, crib: crib || undefined, onlyChanged: true, onProgress, ...(_exIds.length ? { excludeOps: _exIds } : {}) }); }
   catch { box.remove(); return; }
   prog.remove();                               // 跑完移除进度条，让位结果区
   if (token !== runOneKey._token) { box.remove(); return; }  // 输入已变，弃过期穷举区
@@ -1715,22 +1797,11 @@ async function appendExhaustSection(outWrap, q, crib, token) {
       el("span", { class: "exhaust-cat-name" }, catNameById(g.cat)),
       el("span", { class: "exhaust-cat-count" }, String(g.items.length)),
     ));
-    for (const it of g.items) {
-      const hitCls = it.isFlagFormat ? " flag-format" : ((it.flagHit || it.matchesCrib) ? " flag-hit" : "");
-      const row = el("div", { class: "exhaust-row" + (it.ok ? "" : " err") + hitCls });
-      const nameEl = el("span", { class: "exhaust-op" }, opNameBi(getOp(it.opId) || { id: it.opId, name: it.opId }));
-      let valEl;
-      if (!it.ok) {
-        valEl = el("span", { class: "exhaust-val exhaust-err-val" }, "✗ " + (it.error || ""));
-      } else {
-        const full = it.result || "";
-        const shown = full.length > 300 ? full.slice(0, 300) + " …" : full;
-        valEl = el("span", { class: "exhaust-val" + (it.printable < 0.5 ? " garbage" : "") }, shown);
-        row.setAttribute("title", t("ui.common.clickCopy"));
-        row.addEventListener("click", () => { navigator.clipboard?.writeText(full); toast(t("ui.toast.copiedResult")); });
-      }
-      row.append(nameEl, el("span", { class: "exhaust-sep" }, ":"), valEl);
-      catBox.append(row);
+    for (const a of g.algos || []) {
+      const group = el("details", { class: "exhaust-algo", open: a.hasStrongHit ? "" : null });
+      group.append(el("summary", {}, opNameBi(getOp(a.baseOpId) || { id:a.baseOpId, name:a.baseOpId })));
+      for (const it of a.items) group.append(renderCandidateRow(it));
+      catBox.append(group);
     }
     box.append(catBox);
   }
@@ -1765,7 +1836,7 @@ function isTextFile(bytes, name = "") {
   for (let i = 0; i < n; i++) if (bytes[i] === 0) return false;
  // ③ UTF-8 无损解码检验（fatal 模式，非法字节抛错 → 二进制）。
   try {
-    new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, n));
+    _decodeUtf8Fatal(bytes.subarray(0, n));
     return true;
   } catch {
  // 非 UTF-8：可能是 latin1/GBK 等单字节文本。回退到「可打印占比」判定。
@@ -1844,7 +1915,10 @@ function renderFileReport(outWrap, r) {
     const hasActions = Array.isArray(s.actions) && s.actions.length > 0;
  // view 动作：整卡可双击查看（取第一个 view 动作的内容）；卡片加提示条与手型光标。
     const viewAct = hasActions ? s.actions.find((a) => a.type === "view") : null;
-    const card = el("div", { class: "file-section " + s.level + (viewAct ? " file-section-viewable" : "") },
+    const card = el("div", Object.assign(
+      { class: "file-section " + s.level + (viewAct ? " file-section-viewable" : "") },
+      viewAct ? keyBtn(() => openSectionView(s.title, viewAct)) : {},
+    ),
       el("div", { class: "file-section-title" },
         s.icon ? msym(s.icon, "file-section-glyph") : null,
         el("span", {}, s.title),
@@ -1879,8 +1953,9 @@ function renderFileReport(outWrap, r) {
 // section view 动作：只读查看窗（文本 pre / 图片 img），复用 expandableInput 注入的 .exp-* modal 样式。
 function openSectionView(title, act) {
   ensureExpStyles(); // 文件报告页可能从未实例化过可展开输入框，样式表未注入 → 弹窗裸奔白底。此处兜底注入。
+  const previousFocus = document.activeElement;
   const overlay = el("div", { class: "exp-overlay" });
-  const dialog = el("div", { class: "exp-dialog", role: "dialog" });
+  const dialog = el("div", { class: "exp-dialog", role: "dialog", "aria-modal": "true", "aria-label": title || t("ui.file.viewTitle") });
   const head = el("div", { class: "exp-head" },
     el("div", { class: "exp-title" }, title || t("ui.file.viewTitle")),
     el("button", { type: "button", class: "exp-close", title: t("ui.expand.cancel"), onclick: close }, msym("close")),
@@ -1903,13 +1978,11 @@ function openSectionView(title, act) {
   function close() {
     if (closed) return;
     closed = true;
-    document.removeEventListener("keydown", onKey);
+    if (lifecycle) { lifecycle.release(); lifecycle = null; }
     overlay.classList.add("exp-closing");
-    setTimeout(() => overlay.remove(), 175);
+    setTimeout(() => overlay.remove(), 250);
   }
-  function onKey(e) { if (e.key === "Escape") { e.preventDefault(); close(); } }
-  overlay.addEventListener("mousedown", (e) => { if (e.target === overlay) close(); });
-  document.addEventListener("keydown", onKey);
+  let lifecycle = attachModalLifecycle(overlay, { dialog, onClose: close, restoreFocusTo: previousFocus });
 }
 
 // dataURL → 字节 / MIME（出图类 op 下载复用）。
@@ -1926,19 +1999,31 @@ function mimeOfDataUrl(url) {
   return m ? m[1] : "image/png";
 }
 
-// ---- T361 op 产物协议（恒烈 2026-09-02 下单：全能密码学工具箱，该给文件的输出给下载按钮）----
+// ---- T361 op 产物协议（产品负责人 2026-09-02 下单：全能密码学工具箱，该给文件的输出给下载按钮）----
 // run/encode/decode 允许返回新形态对象：{ text: string, files: [{ name, mime, bytes|dataUrl }] }。
 // 返回字符串的 op 全部走旧路径，647 op 零破坏。⚠ 一键解码（magic Worker）路径不认产物对象，
 // 参与 magic 的 op 勿返回对象。bytes 支持 Uint8Array / number[]；dataUrl 自动解字节并推 MIME。
 // 产物下载按钮列表：files 非空时追加到输出媒体区（renderOutMedia 清容器后调用，勿颠倒顺序）；
 // files 为 null/空时只移除旧列表（早退/清空路径由 renderOutMedia 的 innerHTML 清空兜底）。
+// 图片类产物（如流量可读结论的键鼠轨迹/节奏 PNG）同时渲染内联预览图，直接「画出来」而非只给下载。
+let _filePreviewUrls = [];
 function renderOutFiles(container, files) {
   if (!container) return;
   const old = container.querySelector(".io-out-files");
   if (old) old.remove();
+  for (const u of _filePreviewUrls) { try { URL.revokeObjectURL(u); } catch { /* 已释放忽略 */ } }
+  _filePreviewUrls = [];
   if (!Array.isArray(files) || !files.length) return;
   const box = el("div", { class: "io-out-files", style: "display:flex;flex-direction:column;gap:6px;margin-top:10px;align-items:flex-start" });
   for (const { bytes, mime, name } of productFileEntries({ files })) {
+    if (mime && mime.startsWith("image/")) {
+      const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+      _filePreviewUrls.push(url);
+      box.append(el("img", {
+        class: "io-out-file-preview", src: url, alt: name,
+        style: "max-width:320px;max-height:240px;border-radius:6px;cursor:zoom-in;background:#fff;border:1px solid var(--outline)",
+      }));
+    }
     box.append(el("button", {
       type: "button", class: "file-section-act",
       onclick: () => cloudWarnGate(() => downloadBytes(bytes, name, mime)),
@@ -1961,10 +2046,11 @@ function renderOutMedia(container, text) {
   const grid = el("div", { class: "io-out-media-grid", style: "display:flex;flex-wrap:wrap;gap:12px;margin-top:8px" });
   const multi = urls.length > 1;
   urls.forEach((url, i) => {
-    const img = el("img", {
+    const img = el("img", Object.assign({
       class: "io-out-media-img", src: url, alt: "", loading: "lazy",
+      "aria-label": t("ui.file.viewTitle"),
       style: "max-width:180px;max-height:180px;cursor:zoom-in;border-radius:6px;image-rendering:pixelated;background:#fff",
-    });
+    }, keyBtn(() => openImageLightbox(url, ""))));
     img.addEventListener("click", () => openImageLightbox(url, ""));
     const dl = el("button", {
       type: "button", class: "file-section-act",
@@ -1978,7 +2064,8 @@ function renderOutMedia(container, text) {
 // 图片灯箱：全屏遮罩内居中大图，点击遮罩/图片或 Esc 关闭。
 // 与 openSectionView 的小编辑弹窗分开——灯箱要尽量大 + 高保真渲染（不套 stego 的 pixelated）。
 function openImageLightbox(url, alt) {
-  const overlay = el("div", { class: "img-lightbox", role: "dialog", "aria-label": alt || "" });
+  const previousFocus = document.activeElement;
+  const overlay = el("div", { class: "img-lightbox", role: "dialog", "aria-modal": "true", "aria-label": alt || t("ui.file.viewTitle") });
   const img = el("img", { class: "img-lightbox-img", src: url, alt: alt || "" });
   const closeBtn = el("button", { type: "button", class: "img-lightbox-close", title: t("ui.expand.cancel"), onclick: close }, msym("close"));
   overlay.append(img, closeBtn);
@@ -1987,13 +2074,11 @@ function openImageLightbox(url, alt) {
   function close() {
     if (closed) return;
     closed = true;
-    document.removeEventListener("keydown", onKey);
+    if (lifecycle) { lifecycle.release(); lifecycle = null; }
     overlay.classList.add("img-lightbox-closing");
-    setTimeout(() => overlay.remove(), 175);
+    setTimeout(() => overlay.remove(), 250);
   }
-  function onKey(e) { if (e.key === "Escape") { e.preventDefault(); close(); } }
-  overlay.addEventListener("mousedown", () => close());
-  document.addEventListener("keydown", onKey);
+  let lifecycle = attachModalLifecycle(overlay, { dialog: overlay, onClose: close, closeOnBackdrop: "always", initialFocus: closeBtn, restoreFocusTo: previousFocus });
 }
 
 // 给任意 textarea 挂「拖入文件」能力（op 输入框继承首页智能框）：
@@ -2068,14 +2153,60 @@ function attachDropDecode(ta, onLoaded) {
 
 // ---- 单 op 操作面板 ----
 // Shared by workspace family tabs and the search index.
-const FAM_LBL_ZH = { "fam.lbl.attack": "重用 k 攻击", "fam.lbl.sharedPub": "由公钥推导", "fam.lbl.homAdd": "同态加" };
-// T510 弹簧动效总开关：默认开（恒烈 2026-09-12 真机验演示后批准第一批灰度）；'0'=整体回退 CSS 动画
+const FAM_LBL_ZH = { "fam.lbl.attack": "重用 k 攻击", "fam.lbl.sharedPub": "由公钥推导", "fam.lbl.homAdd": "同态加", "fam.lbl.scan": "扫描", "fam.lbl.formatBrute": "爆破", "fam.lbl.smartReport": "智能报告" };
+// T510 弹簧动效总开关：默认开（产品负责人 2026-09-12 真机验演示后批准第一批灰度）；'0'=整体回退 CSS 动画
 document.documentElement.classList.toggle("spring-motion", localStorage.getItem("ebctf.springMotion") !== "0");
 const _segThumbPos = new Map(); // T510④ 族滑块指示器跨渲染位置记忆
-const _famSegScroll = new Map(); // T510② 族滑块横向滚动位置跨重渲染保持（恒烈 2026-09-13「点档位后滚动条重置不跟手」）
+const _famSegScroll = new Map(); // 族滑块横向滚动位置跨重渲染保持（点档位后滚动条不跟手的反馈）
 function famLblText(lk) {
   const v = t(lk);
   return v === lk && FAM_LBL_ZH[lk] ? FAM_LBL_ZH[lk] : v;
+}
+
+// op 页简介与科普卡共用的行内富文本渲染（**加粗** / `码段` / $公式$ 占位）。
+function opDescEl(op) {
+  const txt = opDesc(op);
+  if (!txt) return null;
+  const div = el("div", { class: "op-desc" }, parseInline(txt, true));
+  renderMathIn(div); // 懒加载渲染公式（KaTeX 缺失时降级为原始 TeX，不报错）
+  return div;
+}
+
+function parseInline(text, plainMath) {
+  const frag = document.createDocumentFragment();
+  const pushPlain = (s) => {
+    if (!s) return;
+    // **加粗** → <strong>：放在码段/公式切分之后执行，反引号码段与 $...$ 内的 ** 不受影响
+    // （码段/公式的既有保护不回归）；成对才转换，单个 **（幂运算符、运算符清单）原样保留。
+    // 科普数据是本地可信源，允许富文本标签（<b>/<i>/<sub>/<sup>/<table>/<ul> 等）
+    const bolded = s.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    if (/<[a-z][\s\S]*?>/i.test(bolded)) {
+      const span = el("span", { class: "edu-rich" });
+      span.innerHTML = bolded;
+      frag.append(span);
+    } else frag.append(document.createTextNode(bolded));
+  };
+  // 非码段内再按 $...$ 切公式
+  const pushSegment = (s) => {
+    const parts = String(s).split(/(\$[^$]+\$)/g);
+    for (const p of parts) {
+      if (!p) continue;
+      if (p.startsWith("$") && p.endsWith("$") && p.length > 2) {
+        if (plainMath) { pushPlain(p); continue; } // op 简介里 $...$ 多为哈希签名（$2a$/$7z$），原样保留
+        const span = el("span", { class: "edu-math" });
+        span.setAttribute("data-tex", p.slice(1, -1));
+        frag.append(span);
+      } else pushPlain(p);
+    }
+  };
+  const segs = String(text).split(/(`[^`]+`)/g);
+  for (const s of segs) {
+    if (!s) continue;
+    if (s.startsWith("`") && s.endsWith("`") && s.length > 2)
+      frag.append(el("code", { class: "edu-code" }, s.slice(1, -1)));
+    else pushSegment(s);
+  }
+  return frag;
 }
 
 function renderOp() {
@@ -2086,7 +2217,7 @@ function renderOp() {
   const head = el("div", { class: "op-head" },
     el("div", { class: "op-title" }, msym(CATEGORIES.find((c) => c.id === op.cat)?.icon || "tag"),
       op.requiresBridge ? el("span", { class: "exe-badge" }, "EXE") : null, opName(op)),
-    opDesc(op) ? el("div", { class: "op-desc" }, opDesc(op)) : null,
+    opDescEl(op),
   );
   $ws.append(head);
 
@@ -2146,7 +2277,7 @@ function renderOp() {
           const prev = _segThumbPos.get(op.family);
           famSeg.append(thumb);
           HLSpring.set(thumb, { x: prev == null ? tx : prev });
-          // T510②(恒烈反馈①) 弹动缩减：bouncy150(ζ≈0.56,过冲13px) → 1422/57(名义ζ≈0.75,150ms档,过冲约减半)
+          // T510②(产品裁决①) 弹动缩减：bouncy150(ζ≈0.56,过冲13px) → 1422/57(名义ζ≈0.75,150ms档,过冲约减半)
           if (prev != null && prev !== tx) HLSpring.to(thumb, { x: tx }, { stiffness: 1422, damping: 57 });
           _segThumbPos.set(op.family, tx);
         }
@@ -2170,6 +2301,16 @@ function renderOp() {
     );
     seg.id = "dirSeg";
     $ws.append(seg);
+   // 方向滑块指示器：与族滑块同款滑轨+滑块（spring-motion 关闭时不渲染，回退 .on 背景样式）
+    if (document.documentElement.classList.contains("spring-motion")) {
+      const onBtn = seg.querySelector("button.on");
+      if (onBtn) {
+        const thumb = el("span", { class: "seg-thumb", "aria-hidden": "true" });
+        thumb.style.width = onBtn.offsetWidth + "px";
+        seg.append(thumb);
+        HLSpring.set(thumb, { x: onBtn.offsetLeft });
+      }
+    }
   }
 
  // 参数栏
@@ -2202,7 +2343,7 @@ function renderOp() {
  // IO 框可 resize:vertical（CSS）+ A-/A+ 调字号（会话态 state.ioFont）。
  // op 若声明 fields[] → 渲染多个带标签输入框，收集后按约定拼给 run/encode/decode。
   const hasFields = Array.isArray(op.fields) && op.fields.length > 0;
-  // T399 主输入框三态（恒烈拍板）：无需主输入的 op 不再显示巨型输入框。
+  // T399 主输入框三态（产品裁决）：无需主输入的 op 不再显示巨型输入框。
   //   推导见 registry.inferIoMode（run-only 且首参未引用 → none）；显式 op.io 可覆盖；
   //   自定义实现启用时强制显示（魔改代码可能要吃 text）。inArea 仍会创建（闭包/复制链
   //   引用它），只是不 append 进 DOM——convert() 对 ioIn 缺失按空输入直跑 run-only。
@@ -2230,7 +2371,7 @@ function renderOp() {
       ta.id = "fld_" + f.key;
       ta.style.fontSize = state.ioFont + "px";
       ta.addEventListener("keydown", (e) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); convert(); }
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); triggerConvert(); }
       });
       fieldAreas.push(el("div", { class: "io-field" },
         el("label", { class: "io-field-label" }, f.label),
@@ -2254,21 +2395,78 @@ function renderOp() {
  // 转换动作条：显式「转换/一键解码」按钮，不监听 input 实时跑。
   const actLabel = op.run ? t("ui.op.convert") : (isDual ? t("ui.op.convert") : t("ui.op.decode"));
   const runAct = el("button", { class: "act-btn primary" }, msym(isDual ? "sync_alt" : "bolt"), " " + actLabel);
-  runAct.addEventListener("click", () => convert());
+  runAct.addEventListener("click", async () => {
+   // 重运算 op（explicitRun 白名单）：独立线程跑，主线程零阻塞；运行卡 = 读秒 + 取消。
+    if (isExplicitRunOp(op.id) && op.run && !op.requiresBridge) {
+      const outArea = document.getElementById("ioOut");
+      const mediaBox = document.getElementById("ioOutMedia");
+      if (!outArea) { convert(); return; }
+      const t0 = Date.now();
+      const sec = el("span", {}, "0");
+      const cancelBtn = el("button", { type: "button", class: "act-btn" }, " 取消");
+      const busy = el("div", { class: "op-run-busy" }, "运行中（已 ", sec, " 秒）", cancelBtn);
+      cancelBtn.addEventListener("click", () => cancelOpRun());
+      outArea.parentNode && outArea.parentNode.insertBefore(busy, outArea);
+      const tick = setInterval(() => { sec.textContent = String(Math.round((Date.now() - t0) / 1000)); }, 1000);
+      try {
+        // 与 convert() 同口径：acceptsBytes op 的拖入真字节经 params.rawBytes 透传。
+        // 否则 Worker 按钮只拿到占位文案 → 空输入（流量轨迹图等产物通道失败）。
+        const runParams = (op.acceptsBytes && !hasFields && inArea && inArea._rawBytes)
+          ? { ...state.params, rawBytes: inArea._rawBytes, rawFileName: inArea._rawFileName }
+          : { ...state.params };
+        const out = await runOpOffThread(op.id, inArea.value, runParams, { dir: state.dir });
+        clearInterval(tick); busy.remove();
+       // 对象产物协议与 convert() 同口径：text 进输出框，files 渲染下载按钮。
+        let outText = out, outFiles = null;
+        if (out && typeof out === "object") { outText = out.text != null ? out.text : ""; outFiles = "files" in out ? productFileEntries(out) : null; }
+        outArea.value = outText;
+        outArea.classList.remove("error");
+        renderOutMedia(mediaBox, outText);
+        renderOutFiles(mediaBox, outFiles);
+      } catch (e) {
+        clearInterval(tick); busy.remove();
+        const msg = e.message === "timeout" ? "已超时中止" : (e.message === "cancelled" ? "已取消" : "✗ " + e.message);
+        outArea.value = msg;
+        outArea.classList.toggle("error", e.message !== "cancelled");
+        renderOutMedia(mediaBox, "");
+      }
+      return;
+    }
+    convert();
+  });
+ // Ctrl+Enter / 拖入文件 / 选择文件与运行按钮同口径——显式重 op 一律复用
+ // runAct 监听器走 Worker 通道（busy 卡/取消/超时文案/对象产物渲染均由其处理），不再经
+ // convert() 在主线程同步直跑（旧旁路实测 883ms 级长任务）。轻 op 行为不变（仍 convert()）。
+ // 函数声明提升：上方 fieldAreas 的 keydown 闭包可先引用（触发时本函数体早已可用）。
+  function triggerConvert() {
+    if (isExplicitRunOp(op.id) && op.run && !op.requiresBridge) runAct.click();
+    else convert();
+  }
   const chainAct = el("button", { class: "act-btn", title: t("ui.op.chainToInput") },
     msym("swap_vert"), " " + t("ui.op.chainToInput"));
-  chainAct.addEventListener("click", () => { inArea.value = outArea.value; delete inArea._rawBytes; convert(); });
+  chainAct.addEventListener("click", () => { inArea.value = outArea.value; invalidateFileBytes(inArea); convert(); });
 
  // 输入区主体：多字段模式渲染 fieldAreas；io=none 且无自定义实现 → 细提示条替代巨型输入框。
   const inputBody = hasFields
     ? el("div", { class: "io-fields" }, ...fieldAreas)
     : (showInput ? inArea : el("div", { class: "io-none-hint" },
         msym("info"), " 本操作无需主输入：填好参数后直接运行（自定义实现启用时会恢复输入框）"));
+  // 统一清空：程序化 .value="" 不触发 input 监听，必须显式撤销文件字节通道与占位标记，
+  // 否则清空后再运行会用旧文件字节复活旧结果（结果归属错乱）。
+  const invalidateFileBytes = (ta) => {
+    if (!ta) return;
+    ta._rawBytes = null;
+    ta._rawFileName = null;
+    ta._isFilePlaceholder = false;
+  };
+  const clearInputArea = (ta) => { if (!ta) return; ta.value = ""; invalidateFileBytes(ta); };
   const clearAll = () => {
-    inArea.value = "";
+    clearInputArea(inArea);
     outArea.value = "";
     renderOutMedia(document.getElementById("ioOutMedia"), "");
-    if (hasFields) fieldAreas.forEach((w) => { const ta = w.querySelector(".io-field-area"); if (ta) ta.value = ""; });
+    if (hasFields) fieldAreas.forEach((w) => clearInputArea(w.querySelector(".io-field-area")));
+    // 在途结果归属：清空即作废未完成的转换，避免其迟到结果落回已清空的框。
+    _convSeq++;
   };
 
   const io = el("div", { class: "io io-vert" },
@@ -2278,8 +2476,8 @@ function renderOp() {
         el("span", { class: "io-pane-title" }, t("ui.op.inTitle")),
         el("div", { class: "io-pane-tools" },
           fontDec, fontInc,
-          hasFields ? null : toolBtn("content_paste", t("ui.op.paste"), async () => { try { inArea.value = await navigator.clipboard.readText(); } catch { toast(t("ui.toast.clipFail")); } }),
-          hasFields ? null : toolBtn("cloud_upload", t("ui.op.pickFile"), () => pickFileIntoArea(inArea, () => convert())),
+          hasFields ? null : toolBtn("content_paste", t("ui.op.paste"), async () => { try { inArea.value = await navigator.clipboard.readText(); invalidateFileBytes(inArea); } catch { toast(t("ui.toast.clipFail")); } }),
+          hasFields ? null : toolBtn("cloud_upload", t("ui.op.pickFile"), () => pickFileIntoArea(inArea, triggerConvert)),
           hasFields ? null : toolBtn("select_all", t("ui.op.selectAll"), () => selectAllIO(inArea)),
           hasFields ? null : toolBtn("download", t("ui.op.export"), () => exportTextAsFile(inArea.value)),
           toolBtn("delete", t("ui.op.clear"), clearAll),
@@ -2308,7 +2506,7 @@ function renderOp() {
 
  // 不做 input 实时转换（增删过程性能浪费）。Ctrl+Enter 快捷触发。
   inArea.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); convert(); }
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); triggerConvert(); }
   });
  // 编辑框记事本化——Ctrl+S 导出输入内容为 .txt（Ctrl+Z 撤销走 contenteditable 原生）。
   attachEditorShortcuts(inArea);
@@ -2316,7 +2514,7 @@ function renderOp() {
 
  // 所有 op 输入框都继承首页智能框——无条件支持拖入文件（isTextFile 判定：文本读进框
  // 二进制才转 hex）。原先只在 !hasFields 时挂，导致带参 op（加密/编码带 key 的）拖文件无智能识别。
-  attachDropDecode(inArea, () => convert());
+  attachDropDecode(inArea, triggerConvert);
 
  // 编辑框右键文本处理菜单（智能分段/删空格换行/大小写/反转/金额转中文…）。
  // op 框不走 editorToolbar，故在此直接挂 attachTextContextMenu。输入框可写（onChange 触发转换）
@@ -2396,10 +2594,18 @@ function renderExeOp(op) {
 }
 
 // ---- 科普卡渲染（输出框下方）----
-// 数据来自 eduContent.js；公式用 KaTeX 懒加载（缺失自动降级为原始 TeX）。
+// 数据来自 eduContent.js（经 defer 门面懒加载）；公式用 KaTeX 懒加载（缺失自动降级为原始 TeX）。
 function renderEduCard(opId) {
-  const edu = getEdu(opId, getLocale());
-  if (!edu) return;
+  const edu = getEduSync(opId, getLocale());
+  if (!edu) {
+    // T621-B：科普数据未就绪（懒加载中）→ 就绪后若仍停留在同一 op 页则补渲一次
+    if (!eduContentSettled) {
+      eduContentReady().then((m) => {
+        if (m && location.hash === "#/op/" + opId && !document.querySelector(".edu-card")) renderEduCard(opId);
+      });
+    }
+    return;
+  }
 
   const card = el("div", { class: "edu-card" });
   card.append(el("div", { class: "edu-card-head" },
@@ -2411,38 +2617,6 @@ function renderEduCard(opId) {
  // 返回 DocumentFragment，供多段文本拼接。
  // 顺序（T515 遗留修正）：先提取 `...` 码段，段内字面量不做 $ 公式切分——
  // 否则 `$7z$type$...$` 这类哈希串模板（forensic 五卡）会被误切成伪公式。
-  const parseInline = (text) => {
-    const frag = document.createDocumentFragment();
-    const pushPlain = (s) => {
-      if (!s) return;
- // 科普数据是本地可信源，允许富文本标签（<b>/<i>/<sub>/<sup>/<table>/<ul> 等）
-      if (/<[a-z][\s\S]*?>/i.test(s)) {
-        const span = el("span", { class: "edu-rich" });
-        span.innerHTML = s;
-        frag.append(span);
-      } else frag.append(document.createTextNode(s));
-    };
- // 非码段内再按 $...$ 切公式
-    const pushSegment = (s) => {
-      const parts = String(s).split(/(\$[^$]+\$)/g);
-      for (const p of parts) {
-        if (!p) continue;
-        if (p.startsWith("$") && p.endsWith("$") && p.length > 2) {
-          const span = el("span", { class: "edu-math" });
-          span.setAttribute("data-tex", p.slice(1, -1));
-          frag.append(span);
-        } else pushPlain(p);
-      }
-    };
-    const segs = String(text).split(/(`[^`]+`)/g);
-    for (const s of segs) {
-      if (!s) continue;
-      if (s.startsWith("`") && s.endsWith("`") && s.length > 2)
-        frag.append(el("code", { class: "edu-code" }, s.slice(1, -1)));
-      else pushSegment(s);
-    }
-    return frag;
-  };
 
  // 多段文本（"\n\n" 分段）→ 若干 <p>
   const paras = (text) => {
@@ -2535,7 +2709,7 @@ function renderEduCard(opId) {
           el("code", { class: "edu-ex-val edu-ex-val-out" }, ex.out),
         ),
       );
-      if (ex.desc) row.append(el("div", { class: "edu-ex-desc" }, ex.desc));
+      if (ex.desc) { const exd = el("div", { class: "edu-ex-desc" }); exd.append(parseInline(ex.desc)); row.append(exd); }
       exWrap.append(row);
     }
     section("ui.edu.example", exWrap);
@@ -2552,7 +2726,7 @@ function renderEduCard(opId) {
     section("ui.edu.tips", ul);
   }
 
- // T499 别名（恒烈指示 2026-09-12）：全部可检索别名以标签形式列在科普卡末尾
+ // T499 别名（产品裁决 2026-09-12）：全部可检索别名以标签形式列在科普卡末尾
   if (Array.isArray(edu.aka) && edu.aka.length) {
     const chips = el("div", { class: "edu-aka-chips" });
     for (const a of edu.aka) chips.append(el("span", { class: "edu-aka-chip" }, a));
@@ -2568,7 +2742,7 @@ function renderEduCard(opId) {
 function renderCryptoTryAll(op) {
   const head = el("div", { class: "op-head" },
     el("div", { class: "op-title" }, msym("vpn_key"), opName(op)),
-    opDesc(op) ? el("div", { class: "op-desc" }, opDesc(op)) : null,
+    opDescEl(op),
   );
   $ws.append(head);
 
@@ -2611,7 +2785,7 @@ function renderCryptoTryAll(op) {
     }
     outWrap.append(el("div", { class: "crypto-loading" }, t("ui.crypto.loading")));
     try {
-      const cands = await cryptoTryAll({ cipherText, keyText, ivText, crib });
+      const cands = await cryptoTryAll({ cipherText, keyText, ivText, crib }, { targets: loadTargetConfig().targets });
       outWrap.innerHTML = "";
       if (!cands.length) {
         outWrap.append(el("div", { class: "onekey-empty" },
@@ -2627,7 +2801,8 @@ function renderCryptoTryAll(op) {
           (c.ivEnc ? " iv:" + c.ivEnc : "");
         const cribTag = c.matchesCrib ? " ●" : "";
         const isLong = c.plaintext.length > 500;
-        const valEl = el("div", { class: "ok-val" }, isLong ? c.plaintext.slice(0, 500) + " …" : c.plaintext);
+        const valEl = el("div", { class: "ok-val" });
+        highlightResult(valEl, c.plaintext, c.signals);
         const card = el("div",
           { class: "onekey-card" + (c.matchesCrib ? " crib-hit" : ""),
             title: t("ui.op.copy"),
@@ -2673,6 +2848,13 @@ function updateDirSeg() {
   const [enc, dec] = seg.querySelectorAll("button");
   enc.className = state.dir === "encode" ? "on" : "";
   dec.className = state.dir === "decode" ? "on" : "";
+ // 滑块位移：族滑块同款弹簧（1422/57，150ms 档，名义 ζ≈0.75）；应用内「减少动效」
+ // 开时由弹簧内核直切终值（spring.js to() 对 html.reduce-motion 直设，无新增状态）。
+  const thumb = seg.querySelector(".seg-thumb");
+  const onBtn = seg.querySelector("button.on");
+  if (!thumb || !onBtn) return;
+  thumb.style.width = onBtn.offsetWidth + "px";
+  HLSpring.to(thumb, { x: onBtn.offsetLeft }, { stiffness: 1422, damping: 57 });
 }
 
 function renderParam(op, d) {
@@ -2681,7 +2863,7 @@ function renderParam(op, d) {
   if (d.type === "bool") {
     const cb = el("input", { type: "checkbox", id });
     cb.checked = !!state.params[d.key];
-    cb.addEventListener("change", () => { state.params[d.key] = cb.checked; convert(); });
+    cb.addEventListener("change", () => { state.params[d.key] = cb.checked; convert("param"); });
     wrap.append(
       el("label", { class: "switch", for: id }, cb, el("span", { class: "track" }), el("span", { class: "knob" })),
       el("label", { for: id }, d.label),
@@ -2690,7 +2872,7 @@ function renderParam(op, d) {
     const sel = el("select", { id });
     for (const o of d.options || []) sel.append(el("option", { value: o.value ?? o }, o.label ?? o));
     sel.value = state.params[d.key];
-    sel.addEventListener("change", () => { state.params[d.key] = sel.value; convert(); });
+    sel.addEventListener("change", () => { state.params[d.key] = sel.value; convert("param"); });
     wrap.append(el("label", { for: id }, d.label), sel);
   } else if (d.type === "number") {
  // M3 stepper 自实现，替代浏览器原生 spinner。[−][input][＋] flex 容器。
@@ -2707,14 +2889,14 @@ function renderParam(op, d) {
       const v = clamp(n);
       state.params[d.key] = v;
       inp.value = Number.isNaN(v) ? "" : String(v);
-      convert();
+      convert("param");
     };
     const bump = (dir) => {
       const cur = Number(inp.value);
       const base = Number.isNaN(cur) ? (min ?? 0) : cur;
       commit(base + dir * step);
     };
-    inp.addEventListener("input", () => { state.params[d.key] = Number(inp.value); convert(); });
+    inp.addEventListener("input", () => { state.params[d.key] = Number(inp.value); convert("param"); });
     inp.addEventListener("blur", () => { if (inp.value !== "") commit(Number(inp.value)); });
     const btn = (iconName, dir, label) => {
       const b = el("button", { type: "button", class: "stepper-btn", "aria-label": label, tabindex: "-1" }, msym(iconName));
@@ -2728,31 +2910,80 @@ function renderParam(op, d) {
     const ta = el("textarea", { id, class: "param-bigta", rows: String(Math.min(10, Math.max(3, d.rows ?? 5))),
       placeholder: d.placeholder || "", spellcheck: "false", autocomplete: "off" });
     ta.value = state.params[d.key] ?? "";
-    ta.addEventListener("input", () => { state.params[d.key] = ta.value; convert(); });
+    ta.addEventListener("input", () => { state.params[d.key] = ta.value; convert("param"); });
     const btn = el("button", { type: "button", class: "exp-btn param-bigta-btn",
       title: t("ui.expand.title"), "aria-label": t("ui.expand.title") }, msym("open_in_full"));
     btn.addEventListener("click", () => {
       openExpandModal(ta.value, value => {
         ta.value = value;
         state.params[d.key] = value;
-        convert();
+        convert("param");
       }, { modalTitle: d.label, cancelLabel: t("ui.expand.cancel"), saveLabel: t("ui.expand.save") });
     });
     wrap.append(el("label", { for: id }, d.label), el("div", { class: "param-bigbox" }, ta, btn));
+  } else if (d.type === "image") {
+ // 图片参数：可点按钮选文件、可直接拖图进框，也可粘贴 base64/dataURL（值仍是字符串）
+    const inp = el("input", { type: "text", id, placeholder: d.placeholder || "", spellcheck: "false", autocomplete: "off" });
+    inp.value = state.params[d.key] ?? "";
+    inp.addEventListener("input", () => { state.params[d.key] = inp.value; convert("param"); });
+    const setFrom = (file) => {
+      if (!file) return;
+      const rd = new FileReader();
+      rd.onload = () => { inp.value = String(rd.result || ""); state.params[d.key] = inp.value; convert("param"); };
+      rd.readAsDataURL(file);
+    };
+    const fi = el("input", { type: "file", accept: "image/*" });
+    fi.style.display = "none";
+    fi.addEventListener("change", () => setFrom(fi.files && fi.files[0]));
+    const pick = t("ui.op.pickImage");
+    const btn = el("button", { type: "button", class: "exp-btn param-bigta-btn", title: pick, "aria-label": pick }, msym("upload"));
+    btn.addEventListener("click", () => fi.click());
+    inp.addEventListener("dragover", (e) => { e.preventDefault(); inp.classList.add("dragover"); });
+    inp.addEventListener("dragleave", () => inp.classList.remove("dragover"));
+    inp.addEventListener("drop", (e) => {
+      e.preventDefault(); inp.classList.remove("dragover");
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) setFrom(f);
+    });
+    wrap.append(el("label", { for: id }, d.label), el("div", { class: "param-bigbox" }, inp, btn), fi);
   } else if (EXPANDABLE_KEYS.has(d.key)) {
  // 密钥/IV/字典/替换表/crib 等长文本，用可展开输入框（加宽 + 展开 modal）
     const box = expandableInput({
       id, type: "text", value: state.params[d.key] ?? "", placeholder: d.placeholder || "",
       title: t("ui.expand.title"), modalTitle: d.label,
       cancelLabel: t("ui.expand.cancel"), saveLabel: t("ui.expand.save"),
-      onInput: (v) => { state.params[d.key] = v; convert(); },
+      onInput: (v) => { state.params[d.key] = v; convert("param"); },
     });
     wrap.append(el("label", { for: id }, d.label), box);
   } else {
     const inp = el("input", { type: d.type === "number" ? "number" : "text", id, placeholder: d.placeholder || "" });
     inp.value = state.params[d.key] ?? "";
-    inp.addEventListener("input", () => { state.params[d.key] = d.type === "number" ? Number(inp.value) : inp.value; convert(); });
+    inp.addEventListener("input", () => { state.params[d.key] = d.type === "number" ? Number(inp.value) : inp.value; convert("param"); });
+    let dl = null;
+    if (Array.isArray(d.datalist) && d.datalist.length) {
+ // 候选清单（如常见系统字体）：datalist 供输入时下拉，不强制枚举
+      dl = el("datalist", { id: id + "_dl" });
+      for (const v of d.datalist) dl.append(el("option", { value: v }));
+      inp.setAttribute("list", id + "_dl");
+      if (d.localFonts && typeof window.queryLocalFonts === "function") {
+ // 本机字体枚举需用户手势授权；不支持该 API 的浏览器不显示按钮
+        const lfTitle = t("ui.op.localFonts");
+        const fb = el("button", { type: "button", class: "exp-btn", title: lfTitle, "aria-label": lfTitle }, msym("text_fields"));
+        fb.addEventListener("click", async () => {
+          try {
+            const fonts = await window.queryLocalFonts();
+            const seen = new Set();
+            dl.innerHTML = "";
+            for (const f of fonts) if (!seen.has(f.family)) { seen.add(f.family); dl.append(el("option", { value: f.family })); }
+            toast(t("ui.op.localFontsDone").replace("{0}", seen.size));
+          } catch (e) { toast(t("ui.op.localFontsFail").replace("{0}", String(e && e.message || e))); }
+        });
+        wrap.append(el("label", { for: id }, d.label), el("div", { class: "param-bigbox" }, inp, fb, dl));
+        return wrap;
+      }
+    }
     wrap.append(el("label", { for: id }, d.label), inp);
+    if (dl) wrap.append(dl);
   }
   return wrap;
 }
@@ -2770,11 +3001,23 @@ const EXPANDABLE_KEYS = new Set([
 // op 的 encode/decode/run 可返回值或 Promise（WebCrypto 类算法异步）。
 // 用 _convSeq 防竞态：慢的异步结果回来时若已不是最新一次调用，丢弃。
 let _convSeq = 0;
-async function convert() {
+async function convert(src) {
   const seq = ++_convSeq;
   const operationDir = state.dir;
   const op = getOp(state.opId);
   if (!op) return;
+  // 重运算 op 显式触发：src="param"（参数框逐键等自动路径）命中白名单不跑，
+  // 输出区给「点击运行」占位；显式路径（转换按钮 / Ctrl+Enter，src 省略）照旧执行。
+  if (src === "param" && isExplicitRunOp(op.id)) {
+    const outAreaHint = document.getElementById("ioOut");
+    if (outAreaHint) {
+      outAreaHint.value = explicitRunHint(opName(op));
+      outAreaHint.style.color = "";
+      outAreaHint.classList.remove("error");
+      renderOutMedia(document.getElementById("ioOutMedia"), "");
+    }
+    return;
+  }
   const inArea = document.getElementById("ioIn");
   const outArea = document.getElementById("ioOut");
   if (!outArea) return;
@@ -2891,7 +3134,7 @@ function toggleLangMenu(anchor) {
 }
 
 // ============ 昼夜切换（三态：system / light / dark，默认 system 跟随系统）============
-// THEME_KEY 持久化用户偏好；无存储时默认 "system"（跟随系统明暗，恒烈需求4）。
+// THEME_KEY 持久化用户偏好；无存储时默认 "system"（跟随系统明暗，产品裁决4）。
 const THEME_KEY = "ebctf-theme";
 // 系统明暗判定（prefers-color-scheme）。matchMedia 不可用时兜底 dark。
 function systemPrefersDark() {
@@ -2966,6 +3209,36 @@ try {
 } catch { /* matchMedia 不可用忽略 */ }
 
 let _pwaRefreshPending = false;
+let _pwaBarNotified = false;
+
+// T621-D 温和版：检测到新版本 SW 已安装待命时，给可点击的更新提示条；
+// 用户点「刷新」才走 SKIP_WAITING → controllerchange → reload，绝不自动刷新。
+function notifyNewVersion(reg, attempt) {
+  if (_pwaBarNotified) return;
+  const waiting = reg.waiting;
+  if (!waiting) {
+    // installed 的 statechange 可能早于 registration.waiting 赋值：短轮询兜底（≤8s），不丢提示
+    if ((attempt || 0) < 20) setTimeout(() => notifyNewVersion(reg, (attempt || 0) + 1), 400);
+    return;
+  }
+  _pwaBarNotified = true;
+  const bar = el("div", { class: "pwa-update-bar" },
+    el("span", { class: "pwa-update-text" }, t("ui.pwa.updateBar")),
+    el("button", {
+      class: "pwa-update-btn", type: "button",
+      onclick: () => {
+        _pwaRefreshPending = true;
+        try { waiting.postMessage("SKIP_WAITING"); } catch { /* waiting 已被替换则忽略 */ }
+        bar.remove();
+      },
+    }, t("ui.pwa.updateRefresh")),
+    el("button", {
+      class: "pwa-update-close", type: "button", "aria-label": "×",
+      onclick: () => bar.remove(),
+    }, "×"),
+  );
+  document.body.append(bar);
+}
 
 function initPwa() {
   if (!("serviceWorker" in navigator)) return;
@@ -2975,7 +3248,19 @@ function initPwa() {
     location.reload();
   });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("sw.js", { scope: "./", updateViaCache: "none" }).catch((e) => console.warn("[sw] Service Worker 注册失败（PWA 离线不可用）：", e));
+    navigator.serviceWorker.register("sw.js", { scope: "./", updateViaCache: "none" })
+      .then((reg) => {
+        // 已有 waiting（此前错过提示的）直接补提示；本次安装完成的新 worker 也提示。
+        if (reg.waiting && navigator.serviceWorker.controller) notifyNewVersion(reg);
+        reg.addEventListener("updatefound", () => {
+          const w = reg.installing;
+          if (!w) return;
+          w.addEventListener("statechange", () => {
+            if (w.state === "installed" && navigator.serviceWorker.controller) notifyNewVersion(reg);
+          });
+        });
+      })
+      .catch((e) => console.warn("[sw] Service Worker 注册失败（PWA 离线不可用）：", e));
   }, { once: true });
 }
 
@@ -3011,12 +3296,12 @@ async function checkForUpdate() {
 }
 
 // ============ 顶栏交互 ============
-// T471 M3 触点涟漪（2026-09-09，恒烈批准直改动画层）。
+// T471 M3 触点涟漪（2026-09-09，产品裁决直改动画层）。
 // 文档级 pointerdown 委托；载体 prepend 保证文字层在上；宿主裁剪由载体自身 overflow:hidden 承担，
 // 不改宿主 overflow（避免裁掉 focus outline）；pressed 不透明度走 --ripple-op（M3 规范 12%）；
 // 减动效偏好直接不生成涟漪。宿主重渲染销毁载体时由定时器兜底清理。
 (function initM3Ripple() {
-  return; // 恒烈 2026-09-13 裁决「涟漪效果太糟糕了，取消吧」——涟漪全线停用；CSS 与结构保留备将来重做
+  return; // 产品裁决「涟漪效果太糟糕了，取消吧」——涟漪全线停用；CSS 与结构保留备将来重做
   const HOST_SEL = ".act-btn, .nav-item, .nav-subitem, .stepper-btn, .dir-seg button, .io-mini-btn, .nav-toggle, .fav-btn";
   const reduced = () => document.documentElement.classList.contains("reduce-motion"); // T471b：应用内开关
   document.addEventListener("pointerdown", (e) => {
@@ -3220,8 +3505,9 @@ function attachTouchDragToRecipe(node, getOpId, getFamilyId) {
 // ---- 顶栏搜索：名称/别名/描述/id 实时过滤，下拉候选，点选跳转；候选可拖入配方链 ----
 // 索引在首次用时构建；语言切换后清空重建（opName/opDesc 随语言变）。
 let _searchIndex = null;
+eduContentReady().then(() => { _searchIndex = null; }); // T621-B：科普别名就绪后清缓存，下次搜索重建含 aka 的索引
 function buildSearchIndex() {
-  const aliases = eduAliases(); // { opId: [...aka] }
+  const aliases = eduAliasesSync() || {}; // T621-B：科普懒加载未就绪时无别名，索引照建（就绪后清缓存重建）
   const idx = [];
   for (const op of OPS) {
     if (op.id === "cryptoTryAll") continue; // 虚拟 op 不进搜索
@@ -3280,7 +3566,7 @@ function searchOps(q) {
       else score += 10;
     }
     if (ok) {
- // 恒烈 2026-09-02：常用 op（CTF_HOT）搜索加权——修「RSA 密钥对生成」被注册序靠前的
+ // 产品负责人 2026-09-02：常用 op（CTF_HOT）搜索加权——修「RSA 密钥对生成」被注册序靠前的
  // 攻击类变体（同 100 分）挤出候选位的 bug；同分再按短名优先（入口级 op 排变体长尾前）。
       score += CTF_HOT.has(e.id) ? 25 : 0;
       scored.push({ e, score, nl: e.name.length });
@@ -3291,19 +3577,27 @@ function searchOps(q) {
 }
 
 let _searchActiveIdx = -1;
+// 搜索面板「代」令牌：closePanel/renderResults 各推进一代；在途关闭的 onRest 只认自己那一代，
+// 避免它把期间新渲染的结果清掉（spring-motion 下关闭动画约 150ms，期间快速连打可复现）。
+let _searchPanelGen = 0;
+let _searchPanelClosing = false;
 function initOpSearch() {
   const input = document.getElementById("opSearchInput");
   const panel = document.getElementById("opSearchPanel");
   if (!input || !panel) return;
 
   const closePanel = () => {
+    const gen = ++_searchPanelGen;
     if (document.documentElement.classList.contains("spring-motion")) {
+      _searchPanelClosing = true;
       panel.style.pointerEvents = "none";
       HLSpring.to(panel, { scale: 0.95, opacity: 0 }, { preset: "dur150", onRest: () => {
+        if (gen !== _searchPanelGen) return;   // 期间已重新渲染/再次关闭 → 本次清理作废，绝不碰新内容
+        _searchPanelClosing = false;
         panel.classList.remove("open"); panel.innerHTML = ""; panel.style.pointerEvents = "";
         HLSpring.set(panel, { scale: 1, opacity: 1 });
       } });
-    } else { panel.classList.remove("open"); panel.innerHTML = ""; }
+    } else { panel.classList.remove("open"); panel.innerHTML = ""; _searchPanelClosing = false; }
     _searchActiveIdx = -1;
   };
 
@@ -3315,9 +3609,17 @@ function initOpSearch() {
   };
 
   const renderResults = (results, keepShown) => {
-    // 恒烈 2026-09-02：搜索结果不再砍到 12 条——默认 20 条 + 「加载更多」分页，全量可达。
+    // 产品负责人 2026-09-02：搜索结果不再砍到 12 条——默认 20 条 + 「加载更多」分页，全量可达。
     const PAGE = 20;
     if (!keepShown) _searchShown = PAGE;
+    _searchPanelGen++;                       // 作废在途关闭：其 onRest 不得清掉本次结果
+    if (_searchPanelClosing) {               // 在途关闭会把面板压成半透明并屏蔽点击，这里复位
+      _searchPanelClosing = false;
+      if (document.documentElement.classList.contains("spring-motion")) {
+        panel.style.pointerEvents = "";
+        HLSpring.set(panel, { scale: 1, opacity: 1 });   // 取消在途补间（set 会 running.delete）
+      }
+    }
     panel.innerHTML = "";
     _searchActiveIdx = -1;
     if (!results.length) {
@@ -3345,7 +3647,12 @@ function initOpSearch() {
         try { e.dataTransfer.setData("application/x-ebctf-op", r.id); } catch { /* ignore */ }
         try { e.dataTransfer.setData("text/plain", r.name); } catch { /* ignore */ }
       });
-      item.addEventListener("click", (e) => { e.preventDefault(); pick(r.id); });
+      item.addEventListener("click", (e) => {
+        // 搜索结果不是链接；改造前 Ctrl/Meta/中键也会直接选中，保持该行为。
+        if (e.ctrlKey || e.metaKey || e.button === 1) { e.preventDefault(); pick(r.id); return; }
+        recipeAwareClick(e, () => pick(r.id));
+      });
+      item.addEventListener("dblclick", (e) => recipeOpDoubleClick(e, r.id));
       item.addEventListener("mouseenter", () => { setActive(i); });
       // 触摸：长按 320ms 后拖到配方链；轻触仍选中跳转。
       attachTouchDragToRecipe(item, () => r.id);
@@ -3507,7 +3814,7 @@ function renderAbout(host) {
 
  // 依赖与致谢
  // 新增条目的 note 走本地中文兜底（i18n 冻结期不进主表，解冻后回收为正式 key）。
- // ⚠ 许可红线（恒烈）：只列 MIT/BSD/Apache 等宽松许可；GPL/LGPL 等传染性协议不在此列
+ // ⚠ 许可红线（产品负责人）：只列 MIT/BSD/Apache 等宽松许可；GPL/LGPL 等传染性协议不在此列
  //   （如快速换算的 WASM 汇编引擎 Keystone 为 GPL-2.0，按规不展示，许可信息仅存 PROGRESS.md）。
   const _DEP_ZH = {
     "ui.about.depCm": "自定义实现编辑器内核（行号 / 语法高亮 / 查找 / 撤销 / 括号配对），以 MIT 许可内嵌打包，零运行时外发。",
@@ -3547,6 +3854,7 @@ function renderAbout(host) {
  //   avatar 可选：给了头像即用高亮胶囊（同创始人样式，带圆头像）；noteKey 可选，附贡献说明。
   const OTHER_CONTRIBUTORS = [
     { name: "小布丁", tierKey: "ui.about.tierAuthor", avatar: "public/contributors/xiaobuding.jpg" },
+    { name: "Enze", tierKey: "ui.about.tierContributor", note: String(getLocale()).toLowerCase().startsWith("zh") ? "提出配方链交互优化方案" : "Proposed the recipe-chain interaction improvements" },
     { name: "yy2m1a0", tierKey: "ui.about.tierContributor", noteKey: "ui.about.contribY2m1a0" },
     { name: "霍雅", tierKey: "ui.about.tierContributor", noteKey: "ui.about.contribHuoya" },
     { name: "0x0off", tierKey: "ui.about.tierContributor", noteKey: "ui.about.contrib0x0off" },
@@ -3555,13 +3863,14 @@ function renderAbout(host) {
     { name: "jluvb", tierKey: "ui.about.tierContributor", noteKey: "ui.about.contribJluvb" },
     { name: "smile1110", tierKey: "ui.about.tierContributor", noteKey: "ui.about.contribSmile1110" },
     { name: "拉面", tierKey: "ui.about.tierContributor", noteKey: "ui.about.contribLamian" },
+    { name: "qinling072", tierKey: "ui.about.tierContributor", note: String(getLocale()).toLowerCase().startsWith("zh") ? "提出补充 OutGuess 等图像隐写算法" : "Proposed adding OutGuess and other image-steganography algorithms" },
   ];
   for (const c of OTHER_CONTRIBUTORS) {
     const cap = el("span", { class: c.avatar ? "about-capsule about-capsule-founder" : "about-capsule" });
     if (c.avatar) cap.append(el("img", { class: "about-capsule-avatar", src: c.avatar, alt: "", loading: "lazy" }));
     cap.append(el("span", { class: "about-capsule-name" }, c.name));
     cap.append(el("span", { class: "about-capsule-role" }, t(c.tierKey)));
-    if (c.noteKey) cap.append(el("span", { class: "about-capsule-note" }, t(c.noteKey)));
+    if (c.noteKey || c.note) cap.append(el("span", { class: "about-capsule-note" }, c.note || t(c.noteKey)));
     contribWrap.append(cap);
   }
   page.append(section("ui.about.contributors",
@@ -3749,7 +4058,7 @@ function initNavResizer() {
 
 // ============ 启动 ============
 // T471b：应用内减动效开关（默认关＝动画照常；localStorage 'ebctf.reduceMotion'='1' 开启）。
-// 必须在任何渲染前落类，保证首屏动画策略一致。OS 偏好不再自动接管（恒烈 2026-09-09 指示）。
+// 必须在任何渲染前落类，保证首屏动画策略一致。OS 偏好不再自动接管（产品负责人 2026-09-09 指示）。
 if (localStorage.getItem("ebctf.reduceMotion") === "1") {
   document.documentElement.classList.add("reduce-motion");
 }
@@ -3791,7 +4100,7 @@ hideLoadingScreen();
 initLocale().then((loc) => {
   if (loc && loc !== "zh" && loc !== "en") { applyStaticI18n(); renderNav(); renderWorkspace(); }
 }).catch(() => { /* 语言包加载失败静默留 zh 回退 */ });
-// 区分本地版 vs 服务器版。判据 = bridge 是否在线（点我启动.py 本地部署会同进程自启桥）。
+// 区分本地版 vs 服务器版。判据 = bridge 是否在线（通用点我启动.py 本地部署会同进程自启桥）。
 // 本地版：桥在 → 页面加载完后后台渐进拉全量天珩 4 平面（补冷僻字，不阻塞首屏）。
 // 服务器版：桥不在 → 只留首屏子集，全量 31MB 不自动拉（省带宽/加速首屏），留环境面板手动加载。
 // ---------- M3 动态取色（种子色 → tonal 语义变量，本地纯计算零外发）----------

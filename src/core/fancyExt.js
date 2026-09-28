@@ -529,7 +529,7 @@ register({
   detect: (t) => (/^[+\-\s]+$/.test(t.trim()) && /[+\-]/.test(t) && t.trim().replace(/\s/g, "").length % 10 === 0 ? 0.5 : 0),
 });
 
-// ── T502 dCode 逐字节兼容路径（恒烈 2026-09-12 批准三开关；默认关闭=存量口径零变化）──
+// ── T502 dCode 逐字节兼容路径（产品负责人 2026-09-12 批准三开关；默认关闭=存量口径零变化）──
 const scytaleDcodeEncode = (plain, N, { pad = "|", strip = false } = {}) => {
   if (!Number.isSafeInteger(N) || N < 1) throw new Error("密钥须为正安全整数");
   const t = strip ? String(plain).replace(/[^A-Za-z0-9]/g, "") : String(plain);
@@ -561,7 +561,7 @@ const scytaleDcodeDecode = (cipher, N, { trimFiller = false, filler = "_" } = {}
 
 register({
   id: "scytale", cat: "classic", name: "Scytale 密码棒",
-  desc: "栅格转置；密钥可按栏数或每栏字数解释。编码补 |，解码保留完整格子，不删除真实竖线；原长与补位无法自动区分。dCode 兼容三开关（补位符 _/剥非字母数字/裁尾填充）默认关闭，开启即与 dCode.fr 逐字节同口径（T502 三源对拍 36/36）",
+  desc: "栅格转置；密钥可按栏数或每栏字数解释。编码补 |，解码保留完整格子，不删除真实竖线；原长与补位无法自动区分。dCode 兼容三开关（补位符 _/剥非字母数字/裁尾填充）默认关闭，开启即与 dCode.fr 逐字节同口径（三源对拍 36/36）",
   params: [
     { key: "column", label: "栏数", type: "number", default: 2, placeholder: "≥1" },
     { key: "keyMode", label: "密钥含义", type: "select", default: "column", options: [{ value: "column", label: "栏数" }, { value: "perCol", label: "每栏字数" }] },

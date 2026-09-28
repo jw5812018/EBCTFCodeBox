@@ -16,9 +16,10 @@
  * 参考：RFC 7519 (JWT)、RFC 7516 (JWE)、PASETO 规范。
  */
 import { register } from "./registry.js";
+import { finishBytesDecode } from "./bytesIo.js";
 
 const te = (s) => new TextEncoder().encode(s);
-const td = (b) => new TextDecoder("utf-8", { fatal: false }).decode(new Uint8Array(b));
+// 本文件的 decode 出口已改为 finishBytesDecode（见 ./bytesIo.js）——不再有本地有损解码。
 
 // ============================================================
 // base64url 工具（RFC 4648 §5，无 padding，- 与 _ 替换 + /）
@@ -40,7 +41,7 @@ function b64urlEncodeText(text) {
   return b64urlEncodeBytes(te(text));
 }
 function b64urlDecodeText(s) {
-  return td(b64urlDecodeToBytes(s));
+  return finishBytesDecode(b64urlDecodeToBytes(s), { textMode: "hex", name: "b64urlJson" });
 }
 
 // ============================================================

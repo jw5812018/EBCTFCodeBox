@@ -1,5 +1,5 @@
 /*
- * invisibles.js — 不可见字符可视化表（T80，cat:'stego'）。
+ * invisibles.js — 不可见字符可视化表（T80，cat:'image'）。
  *
  * 定位：与 stegoText.js 的 zwScan（文本报告）正交——本文件是「可复用数据 + 结构化 API」
  * 供编辑框「显示不可见字符」开关与输入检测提醒直接调用。零宽 / 控制符 / BOM /
@@ -15,8 +15,6 @@
  * 注册 op：invisibleViz（run → 可视化 + 命中清单 + 统计）
  * 红线：不碰 stegoText.js / stego.js；op id 不与现有 stego op 冲突。
  */
-import { register } from "./registry.js";
-
 // ============================================================
 // 统一不可见字符表：码位 → { name, type, glyph }
 // type: 'zero-width' | 'bidi' | 'whitespace' | 'bom' | 'control' | 'format'
@@ -286,15 +284,6 @@ function invisibleViz(text, p = {}) {
 }
 
 // ============================================================
-// 注册
+// 导出（不可见字符可视化已并入统一「隐写检测」op，不再自我注册）
 // ============================================================
-register({
-  id: "invisibleViz",
-  cat: "stego",
-  name: "不可见字符可视化",
-  desc: "零宽 / 控制符 / BOM / 各类空白统一映射为可见占位符 + 命中清单 + 类型统计 + 一键剥离",
-  params: [],
-  run: invisibleViz,
-});
-
-export { INVISIBLES, TYPE_LABEL, DANGEROUS_TYPES, cpLabel };
+export { INVISIBLES, TYPE_LABEL, DANGEROUS_TYPES, cpLabel, invisibleViz };

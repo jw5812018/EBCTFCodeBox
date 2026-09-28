@@ -1,4 +1,3 @@
-import { register } from "./registry.js";
 import { inputToBytes } from "./compress.js";
 import { productFileEntries } from "./productResult.js";
 import { pngCheckSig, gifCheckSig, readU16be, readU16le, readU32be, latin1, hex } from "./stegoImage2.js";
@@ -93,5 +92,4 @@ export function stegoQuickScan(text, p = {}) {
   return lines.join("\n");
 }
 
-register({ id: "stegoQuickScan", cat: "stego", name: "图片隐写快速分析", desc: "PNG/JPEG/GIF 结构、元数据与尾随聚合；8MiB/4096步上限，不执行重度扫描", acceptsBytes: true, noAuto: true,
-  params: [{ key: "inputEnc", label: "输入编码", type: "select", default: "base64", options: [{ value: "base64", label: "Base64" }, { value: "hex", label: "Hex" }] }], run: stegoQuickScan });
+// 本 op（图片隐写快速分析）已并入统一「隐写检测」op，不再自我注册；stegoQuickScan 保留为库导出。

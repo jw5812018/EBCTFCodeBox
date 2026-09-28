@@ -1,5 +1,5 @@
 /*
- * lzcodec.js — LZ4 / LZString 压缩（cat:'modern'，双向）。
+ * lzcodec.js — LZ4 / LZString 压缩（cat:'archive'，双向）。
  *
  * 决策：
  * - LZString：实现标准 LZW 压缩（参考 pieroxy/lz-string 算法思路，用数字数组
@@ -117,7 +117,7 @@ function lzwDecompress(input) {
 // ============================================================
 register({
   id: "lzstring",
-  cat: "modern",
+  cat: "archive",
   name: "LZString 压缩 (LZW)",
   desc: "标准 LZW 压缩（参考 pieroxy/lz-string 算法思路）。encode 压缩为 JSON 数字数组；decode 解压还原。仅支持 Latin-1 字符（0-255），中文等多字节字符请先 UTF-8 编码。LZ4 跳过（块格式对齐成本高）。",
   params: [],
